@@ -16,7 +16,6 @@ import {
   Loader2,
   CheckCircle2,
   AlertTriangle,
-  Brain,
 } from "lucide-react";
 import {
   Bar,
@@ -93,6 +92,15 @@ const MONTH_TABS = [
 ];
 
 const CURRENT_MONTH_TAB = `${new Date().getMonth() + 1}月`;
+
+// 會計年度 4月起算：1~3月屬於「前一年度」
+const _now = new Date();
+const CURRENT_FISCAL_YEAR = String(
+  _now.getMonth() + 1 >= 4 ? _now.getFullYear() : _now.getFullYear() - 1
+);
+const DEFAULT_YEAR = YEAR_OPTIONS.includes(CURRENT_FISCAL_YEAR)
+  ? CURRENT_FISCAL_YEAR
+  : YEAR_OPTIONS[0];
 
 const PRELOADED_DATA = {
   2024: {
@@ -1119,6 +1127,20 @@ function getClientId() {
   return id;
 }
 
+// 會計月份 → 實際日曆年月（4月起算，1~3月落在次一日曆年）
+function getCalendarYearMonth(year, monthTab) {
+  const monthIndex = MONTH_TABS.indexOf(monthTab);
+  const calendarMonth = monthIndex < 9 ? monthIndex + 4 : monthIndex - 8;
+  const calendarYear =
+    monthIndex < 9 ? Number(year) : Number(year) + 1;
+  return { calendarYear, calendarMonth };
+}
+
+function getDaysInMonth(year, monthTab) {
+  const { calendarYear, calendarMonth } = getCalendarYearMonth(year, monthTab);
+  return new Date(calendarYear, calendarMonth, 0).getDate();
+}
+
 function buildMonthState(year, month) {
   const monthly = PRELOADED_DATA?.[year]?.[month] || { daily: [], adSpend: {} };
   const rows = Array.from({ length: 31 }, (_, i) => ({
@@ -1208,6 +1230,61 @@ function sanitizeAllYears(data) {
     });
   });
   return result;
+}
+
+// 判斷單一月份是否含有任何使用者資料（非空白骨架）
+function monthHasData(monthState) {
+  if (!monthState) return false;
+  if (
+    (monthState.rows || []).some((r) =>
+      Object.keys(r).some(
+        (k) => k !== "day" && String(r[k] ?? "").trim() !== ""
+      )
+    )
+  )
+    return true;
+  if (
+    Object.values(monthState.adSpend || {}).some(
+      (v) => String(v ?? "").trim() !== ""
+    )
+  )
+    return true;
+  if (
+    Object.values(monthState.orderOverrides || {}).some(
+      (v) => String(v ?? "").trim() !== ""
+    )
+  )
+    return true;
+  if (
+    (monthState.dynamicChannels || []).join(",") !==
+    DEFAULT_DYNAMIC_CHANNELS.join(",")
+  )
+    return true;
+  if (
+    (monthState.adChannels || []).join(",") !== DEFAULT_AD_CHANNELS.join(",")
+  )
+    return true;
+  return false;
+}
+
+// 儲存前裁掉「完全空白的年度／月份」，大幅縮小 Firestore 文件與 localStorage 體積。
+// 讀回時 sanitizeAllYears 會用預設骨架補齊，資料不會遺失。
+// 有預載資料的年度一律完整保留（避免使用者清除預載值後被還原）。
+function pruneAllYears(all) {
+  const out = {};
+  Object.keys(all || {}).forEach((year) => {
+    const months = all[year] || {};
+    if (PRELOADED_DATA[year]) {
+      out[year] = months;
+      return;
+    }
+    const kept = {};
+    MONTH_TABS.forEach((m) => {
+      if (monthHasData(months[m])) kept[m] = months[m];
+    });
+    if (Object.keys(kept).length) out[year] = kept;
+  });
+  return out;
 }
 
 /* =========================
@@ -1339,12 +1416,13 @@ export default function App() {
   const clientIdRef = useRef(getClientId());
   const hydratedRef = useRef(false);
   const skipNextSaveRef = useRef(false);
+  const dirtyRef = useRef(false); // 本機有尚未寫入雲端的變更
   const saveTimerRef = useRef(null);
   const undoStackRef = useRef([]);
   const isUndoingRef = useRef(false);
   const tableRef = useRef(null);
 
-  const [activeYear, setActiveYear] = useState("2025");
+  const [activeYear, setActiveYear] = useState(DEFAULT_YEAR);
   const [activeMonth, setActiveMonth] = useState(
     MONTH_TABS.includes(CURRENT_MONTH_TAB) ? CURRENT_MONTH_TAB : "4月"
   );
@@ -1387,6 +1465,12 @@ export default function App() {
     });
   };
 
+  // data-theme 需掛在 <html> 上，body 背景才會跟著主題切換
+  // （修正淺色模式 overscroll 時露出深色底的問題）
+  useEffect(() => {
+    document.documentElement.setAttribute("data-theme", theme);
+  }, [theme]);
+
   const monthData = allYears[activeYear][activeMonth];
   const loadMonth = (month) => setActiveMonth(month);
 
@@ -1401,16 +1485,20 @@ export default function App() {
     ensureYearExists(activeYear);
   }, [activeYear]);
 
+  // Undo：只快照「被更動的月份」而非整包年度資料，
+  // 避免每次輸入都深拷貝全部年度造成卡頓
+  const pushUndo = (months) => {
+    undoStackRef.current = [
+      ...undoStackRef.current.slice(-49),
+      { year: activeYear, months: JSON.parse(JSON.stringify(months)) },
+    ];
+  };
+
   const updateActiveMonth = (updater) => {
+    if (!isUndoingRef.current) pushUndo({ [activeMonth]: monthData });
+    dirtyRef.current = true;
     setAllYears((prev) => {
       const safeYear = prev[activeYear] || buildYearState(activeYear);
-      // Push current state to undo stack before mutation
-      if (!isUndoingRef.current) {
-        undoStackRef.current = [
-          ...undoStackRef.current.slice(-49),
-          JSON.parse(JSON.stringify(prev)),
-        ];
-      }
       return {
         ...prev,
         [activeYear]: {
@@ -1421,11 +1509,38 @@ export default function App() {
     });
   };
 
+  // 通路屬於整個年度：新增／刪除通路時套用到該年度所有月份
+  const updateYearMonths = (updater) => {
+    if (!isUndoingRef.current)
+      pushUndo(allYears[activeYear] || buildYearState(activeYear));
+    dirtyRef.current = true;
+    setAllYears((prev) => {
+      const safeYear = prev[activeYear] || buildYearState(activeYear);
+      const nextYear = {};
+      MONTH_TABS.forEach((m) => {
+        nextYear[m] = updater(safeYear[m]);
+      });
+      return { ...prev, [activeYear]: nextYear };
+    });
+  };
+
   const handleUndo = () => {
-    if (undoStackRef.current.length === 0) return;
-    const prevState = undoStackRef.current.pop();
+    const entry = undoStackRef.current.pop();
+    if (!entry) return;
     isUndoingRef.current = true;
-    setAllYears(sanitizeAllYears(prevState));
+    dirtyRef.current = true;
+    setAllYears((prev) => {
+      const safeYear = prev[entry.year] || buildYearState(entry.year);
+      const restored = { ...safeYear };
+      Object.keys(entry.months).forEach((m) => {
+        restored[m] = sanitizeMonthState(entry.months[m]);
+      });
+      return { ...prev, [entry.year]: restored };
+    });
+    // 跳回被復原的年月，讓使用者看得到復原結果
+    setActiveYear(entry.year);
+    const monthKeys = Object.keys(entry.months);
+    if (monthKeys.length === 1) setActiveMonth(monthKeys[0]);
     setTimeout(() => {
       isUndoingRef.current = false;
     }, 50);
@@ -1461,23 +1576,30 @@ export default function App() {
       monthData.dynamicChannels.includes(key)
     )
       return;
-    updateActiveMonth((prev) => ({
-      ...prev,
-      dynamicChannels: [...prev.dynamicChannels, key],
-      rows: prev.rows.map((r) => ({ ...r, [key]: "" })),
-      orderOverrides: { ...(prev.orderOverrides || {}), [key]: "" },
-    }));
+    updateYearMonths((prev) =>
+      prev.dynamicChannels.includes(key)
+        ? prev
+        : {
+            ...prev,
+            dynamicChannels: [...prev.dynamicChannels, key],
+            rows: prev.rows.map((r) => ({ ...r, [key]: r[key] ?? "" })),
+            orderOverrides: { ...(prev.orderOverrides || {}), [key]: "" },
+          }
+    );
     setNewRevenueChannel("");
   };
 
   const removeRevenueChannel = (key) => {
     if (
       !window.confirm(
-        `確定要刪除通路「${labelOf(key)}」及其所有資料？此操作無法復原。`
+        `確定要刪除通路「${labelOf(
+          key
+        )}」？將移除 ${activeYear} 年度所有月份的此通路資料（可按 Ctrl+Z 復原）。`
       )
     )
       return;
-    updateActiveMonth((prev) => {
+    updateYearMonths((prev) => {
+      if (!prev.dynamicChannels.includes(key)) return prev;
       const nextOverrides = { ...(prev.orderOverrides || {}) };
       delete nextOverrides[key];
       return {
@@ -1503,17 +1625,28 @@ export default function App() {
   const addAdChannel = () => {
     const key = newAdChannel.trim().toLowerCase();
     if (!key || monthData.adChannels.includes(key)) return;
-    updateActiveMonth((prev) => ({
-      ...prev,
-      adChannels: [...prev.adChannels, key],
-      adSpend: { ...prev.adSpend, [key]: "" },
-    }));
+    updateYearMonths((prev) =>
+      prev.adChannels.includes(key)
+        ? prev
+        : {
+            ...prev,
+            adChannels: [...prev.adChannels, key],
+            adSpend: { ...prev.adSpend, [key]: prev.adSpend?.[key] ?? "" },
+          }
+    );
     setNewAdChannel("");
   };
 
   const removeAdChannel = (key) => {
-    if (!window.confirm(`確定要刪除廣告渠道「${labelOf(key)}」？`)) return;
-    updateActiveMonth((prev) => {
+    if (
+      !window.confirm(
+        `確定要刪除廣告渠道「${labelOf(
+          key
+        )}」？將移除 ${activeYear} 年度所有月份的此渠道金額（可按 Ctrl+Z 復原）。`
+      )
+    )
+      return;
+    updateYearMonths((prev) => {
       const next = { ...prev.adSpend };
       delete next[key];
       return {
@@ -1532,6 +1665,11 @@ export default function App() {
         [key]: String(value).replace(/[^0-9]/g, ""),
       },
     }));
+  };
+
+  const changeGrowthRate = (value) => {
+    dirtyRef.current = true;
+    setTargetGrowthRate(String(value).replace(/[^0-9]/g, ""));
   };
 
   // Firebase auth
@@ -1556,6 +1694,8 @@ export default function App() {
   }, []);
 
   // Firestore listener
+  // - 忽略本機 pending write 的回音（hasPendingWrites）
+  // - 本機有未儲存變更時不套用遠端快照，避免打字中被覆蓋
   useEffect(() => {
     if (!authReady) return;
     const ref = doc(fbDb, FIRESTORE_COLLECTION, FIRESTORE_DOC_ID);
@@ -1563,23 +1703,31 @@ export default function App() {
       ref,
       (snap) => {
         try {
-          if (snap.exists()) {
-            const remote = snap.data() || {};
-            const remoteYears = sanitizeAllYears(remote.allYears);
-            const remoteTargetGrowthRate =
-              typeof remote.targetGrowthRate === "string"
-                ? remote.targetGrowthRate
-                : String(remote.targetGrowthRate || "5");
-            skipNextSaveRef.current = true;
-            setAllYears(remoteYears);
-            setTargetGrowthRate(remoteTargetGrowthRate);
-            hydratedRef.current = true;
-            setSyncState("synced");
-            setLastSyncedAt(new Date().toLocaleString("zh-TW"));
-          } else {
+          if (snap.metadata.hasPendingWrites) return;
+          if (!snap.exists()) {
             hydratedRef.current = true;
             setSyncState("idle");
+            return;
           }
+          const remote = snap.data() || {};
+          const isOwnEcho = remote.updatedBy === clientIdRef.current;
+          if (hydratedRef.current && isOwnEcho) {
+            setSyncState("synced");
+            setLastSyncedAt(new Date().toLocaleString("zh-TW"));
+            return;
+          }
+          if (hydratedRef.current && dirtyRef.current) return;
+          const remoteYears = sanitizeAllYears(remote.allYears);
+          const remoteTargetGrowthRate =
+            typeof remote.targetGrowthRate === "string"
+              ? remote.targetGrowthRate
+              : String(remote.targetGrowthRate || "5");
+          skipNextSaveRef.current = true;
+          setAllYears(remoteYears);
+          setTargetGrowthRate(remoteTargetGrowthRate);
+          hydratedRef.current = true;
+          setSyncState("synced");
+          setLastSyncedAt(new Date().toLocaleString("zh-TW"));
         } catch (err) {
           console.error(err);
           hydratedRef.current = true;
@@ -1595,13 +1743,19 @@ export default function App() {
     return () => unsub();
   }, [authReady]);
 
-  // Local storage backup
+  // Local storage backup（debounce + 裁掉空白年度，避免每個按鍵全量序列化）
   useEffect(() => {
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(allYears));
-    } catch (err) {
-      console.error(err);
-    }
+    const timer = setTimeout(() => {
+      try {
+        localStorage.setItem(
+          STORAGE_KEY,
+          JSON.stringify(pruneAllYears(allYears))
+        );
+      } catch (err) {
+        console.error(err);
+      }
+    }, 400);
+    return () => clearTimeout(timer);
   }, [allYears]);
 
   useEffect(() => {
@@ -1610,7 +1764,7 @@ export default function App() {
     } catch {}
   }, [targetGrowthRate]);
 
-  // Firestore save
+  // Firestore save（整份覆寫 + 裁掉空白年度，控制文件大小在 1MiB 上限內）
   useEffect(() => {
     if (!authReady || !hydratedRef.current) return;
     if (skipNextSaveRef.current) {
@@ -1621,22 +1775,20 @@ export default function App() {
     saveTimerRef.current = setTimeout(async () => {
       try {
         setSyncState("syncing");
+        dirtyRef.current = false;
         const ref = doc(fbDb, FIRESTORE_COLLECTION, FIRESTORE_DOC_ID);
-        await setDoc(
-          ref,
-          {
-            allYears,
-            targetGrowthRate,
-            updatedAt: serverTimestamp(),
-            updatedAtClient: new Date().toISOString(),
-            updatedBy: clientIdRef.current,
-          },
-          { merge: true }
-        );
+        await setDoc(ref, {
+          allYears: pruneAllYears(allYears),
+          targetGrowthRate,
+          updatedAt: serverTimestamp(),
+          updatedAtClient: new Date().toISOString(),
+          updatedBy: clientIdRef.current,
+        });
         setSyncState("synced");
         setLastSyncedAt(new Date().toLocaleString("zh-TW"));
       } catch (err) {
         console.error(err);
+        dirtyRef.current = true;
         setSyncState("error");
       }
     }, 700);
@@ -1674,15 +1826,23 @@ export default function App() {
     [theme]
   );
 
+  const daysInMonth = useMemo(
+    () => getDaysInMonth(activeYear, activeMonth),
+    [activeYear, activeMonth]
+  );
+
+  // 只加總「當月實際存在的天數」，避免隱藏列（如 2 月的 29~31 日）被計入
   const totals = useMemo(() => {
     const base = Object.fromEntries(currentChannels.map((k) => [k, 0]));
-    monthData.rows.forEach((r) => {
-      currentChannels.forEach((k) => {
-        base[k] += n(r[k]);
+    monthData.rows
+      .filter((r) => r.day <= daysInMonth)
+      .forEach((r) => {
+        currentChannels.forEach((k) => {
+          base[k] += n(r[k]);
+        });
       });
-    });
     return { ...base, total: currentChannels.reduce((s, k) => s + base[k], 0) };
-  }, [monthData.rows, monthData.dynamicChannels]);
+  }, [monthData.rows, monthData.dynamicChannels, daysInMonth]);
 
   const chartData = useMemo(() => {
     const factor = 1 + n(targetGrowthRate) / 100;
@@ -1692,25 +1852,33 @@ export default function App() {
       const currentState =
         allYears[activeYear]?.[item.month] ||
         buildYearState(activeYear)[item.month];
+      const dim = getDaysInMonth(activeYear, item.month);
       const currentCh = [
         ...FIXED_CHANNELS.map((c) => c.key),
         ...currentState.dynamicChannels,
       ];
-      const actual = currentState.rows.reduce(
-        (sum, row) => sum + currentCh.reduce((rs, key) => rs + n(row[key]), 0),
-        0
-      );
+      const actual = currentState.rows
+        .filter((row) => row.day <= dim)
+        .reduce(
+          (sum, row) =>
+            sum + currentCh.reduce((rs, key) => rs + n(row[key]), 0),
+          0
+        );
       let lastYearActual = item.lastYear;
       if (prevYearState?.[item.month]) {
         const prevState = prevYearState[item.month];
+        const prevDim = getDaysInMonth(prevYear, item.month);
         const prevCh = [
           ...FIXED_CHANNELS.map((c) => c.key),
           ...prevState.dynamicChannels,
         ];
-        lastYearActual = prevState.rows.reduce(
-          (sum, row) => sum + prevCh.reduce((rs, key) => rs + n(row[key]), 0),
-          0
-        );
+        lastYearActual = prevState.rows
+          .filter((row) => row.day <= prevDim)
+          .reduce(
+            (sum, row) =>
+              sum + prevCh.reduce((rs, key) => rs + n(row[key]), 0),
+            0
+          );
       }
       return {
         ...item,
@@ -1745,44 +1913,56 @@ export default function App() {
   );
 
   const currentRevenue = totals.total;
-  const currentTarget =
-    (chartData.find((item) => item.month === activeMonth) || {}).target || 0;
   const currentChart = chartData.find((item) => item.month === activeMonth) || {
     lastYear: 0,
+    target: 0,
   };
+  const currentTarget = currentChart.target || 0;
   const yoy = currentChart.lastYear
     ? ((currentRevenue - currentChart.lastYear) / currentChart.lastYear) * 100
     : 0;
   const achieveRate = currentTarget
     ? (currentRevenue / currentTarget) * 100
     : 0;
-  const ytd = chartData.reduce((s, i) => s + i.actual, 0);
-  const ytdLastYear = chartData.reduce((s, i) => s + (i.lastYear || 0), 0);
+
+  // YTD 同比：本年與去年都「只計已有實績的月份」，避免拿部分年度對整年比較
+  const monthsWithActual = chartData.filter((i) => i.actual > 0);
+  const ytd = monthsWithActual.reduce((s, i) => s + i.actual, 0);
+  const ytdLastYear = monthsWithActual.reduce(
+    (s, i) => s + (i.lastYear || 0),
+    0
+  );
   const ytdYoY = ytdLastYear ? ((ytd - ytdLastYear) / ytdLastYear) * 100 : 0;
   const annualTarget = chartData.reduce((s, i) => s + i.target, 0);
-  const monthsWithRevenue = chartData.filter((i) => i.actual > 0).length;
+  // 同期目標（僅已有實績月份的目標加總）→ 用來判斷 AHEAD / ON TRACK / BEHIND
+  const ytdTarget = monthsWithActual.reduce((s, i) => s + (i.target || 0), 0);
+  const paceRate = ytdTarget ? (ytd / ytdTarget) * 100 : 0;
+  const monthsWithRevenue = monthsWithActual.length;
   const projectedAnnual =
     monthsWithRevenue > 0 ? Math.round((ytd / monthsWithRevenue) * 12) : 0;
   const annualRate = annualTarget ? (ytd / annualTarget) * 100 : 0;
   const gapToTarget = currentRevenue - currentTarget;
 
-  const daysInMonth = useMemo(() => {
-    const monthIndex = MONTH_TABS.indexOf(activeMonth);
-    // fiscal year: 4月=index0 → calendar month 4, ... 3月=index11 → calendar month 3
-    const calendarMonth = monthIndex < 9 ? monthIndex + 4 : monthIndex - 8;
-    const calendarYear =
-      monthIndex < 9 ? Number(activeYear) : Number(activeYear) + 1;
-    return new Date(calendarYear, calendarMonth, 0).getDate();
-  }, [activeMonth, activeYear]);
-
   const filteredRows = useMemo(() => {
     const validRows = monthData.rows.filter((r) => r.day <= daysInMonth);
-    if (!search.trim()) return validRows;
-    return validRows.filter((r) => String(r.day).includes(search.trim()));
+    const q = search.trim();
+    if (!q) return validRows;
+    return validRows.filter((r) => String(r.day) === q);
   }, [monthData.rows, search, daysInMonth]);
 
-  // Anomaly detection — flag days with revenue > 2× daily average or = 0 when others have data
+  // 異常偵測 — 「無營收」只標記已過去的日期，未來日期不視為異常
   const anomalyFlags = useMemo(() => {
+    const { calendarYear, calendarMonth } = getCalendarYearMonth(
+      activeYear,
+      activeMonth
+    );
+    const today = new Date();
+    const monthStart = new Date(calendarYear, calendarMonth - 1, 1);
+    const isCurrentMonth =
+      today.getFullYear() === calendarYear &&
+      today.getMonth() === calendarMonth - 1;
+    const lastFlaggableDay =
+      monthStart > today ? 0 : isCurrentMonth ? today.getDate() - 1 : daysInMonth;
     const dailyTotals = monthData.rows
       .filter((r) => r.day <= daysInMonth)
       .map((row) => ({
@@ -1795,7 +1975,11 @@ export default function App() {
       withRevenue.reduce((s, d) => s + d.total, 0) / withRevenue.length;
     const flags = {};
     dailyTotals.forEach((d) => {
-      if (d.total === 0 && withRevenue.length > 5) {
+      if (
+        d.total === 0 &&
+        d.day <= lastFlaggableDay &&
+        withRevenue.length > 5
+      ) {
         flags[d.day] = "zero";
       } else if (d.total > avg * 2.2) {
         flags[d.day] = "spike";
@@ -1804,7 +1988,7 @@ export default function App() {
       }
     });
     return flags;
-  }, [monthData.rows, daysInMonth, currentChannels]);
+  }, [monthData.rows, daysInMonth, currentChannels, activeYear, activeMonth]);
 
   const handleCellFocus = (e) => {
     e.target.select();
@@ -1823,37 +2007,45 @@ export default function App() {
 
     if (e.key === "Enter") {
       // Enter → move down (same column, next row)
-      e.preventDefault();
       const nextIdx = idx + colCount;
       if (nextIdx < inputs.length) {
+        e.preventDefault();
         inputs[nextIdx].focus();
       }
     } else if (e.key === "Tab") {
-      e.preventDefault();
-      if (e.shiftKey) {
-        // Shift+Tab → move left, or wrap to previous row last cell
-        const prevIdx = idx - 1;
-        if (prevIdx >= 0) inputs[prevIdx].focus();
-      } else {
-        // Tab → move right, or wrap to next row first cell
-        const nextIdx = idx + 1;
-        if (nextIdx < inputs.length) inputs[nextIdx].focus();
+      // 邊界時不攔截，讓瀏覽器自然移出表格
+      const target = e.shiftKey ? idx - 1 : idx + 1;
+      if (target >= 0 && target < inputs.length) {
+        e.preventDefault();
+        inputs[target].focus();
       }
     }
   };
 
-  const totalOrdersAllChannels = currentChannels.reduce((sum, key) => {
-    const fallbackOrder = Math.max(Math.round((totals[key] || 0) / 10000), 0);
-    const actualOverride =
-      monthData.orderOverrides?.[key] !== undefined &&
-      monthData.orderOverrides?.[key] !== ""
-        ? monthData.orderOverrides[key]
-        : fallbackOrder;
-    return sum + n(actualOverride);
-  }, 0);
+  // 訂單數：未填寫時以「營收 ÷ 10,000」推估（以 placeholder 呈現，不冒充實際值），
+  // 列表顯示與總計使用同一套邏輯
+  const orderInfos = currentChannels.map((key) => {
+    const amount = totals[key] || 0;
+    const ov = monthData.orderOverrides?.[key];
+    const hasOverride = ov !== undefined && String(ov).trim() !== "";
+    const estimate = Math.max(Math.round(amount / 10000), 0);
+    return {
+      key,
+      amount,
+      hasOverride,
+      estimate,
+      count: hasOverride ? n(ov) : estimate,
+      inputValue: hasOverride ? String(ov) : "",
+    };
+  });
+  const totalOrdersAllChannels = orderInfos.reduce((s, o) => s + o.count, 0);
+  const hasEstimatedOrders = orderInfos.some(
+    (o) => !o.hasOverride && o.count > 0
+  );
 
   const activeDaysWithRevenue = monthData.rows.filter(
     (row) =>
+      row.day <= daysInMonth &&
       currentChannels.reduce((rowSum, key) => rowSum + n(row[key]), 0) > 0
   ).length;
 
@@ -2545,7 +2737,6 @@ export default function App() {
           font-size: 11px;
         }
 
-        /* ── Tooltip ── */
         /* ── Tooltip (always dark, both themes) ── */
         .tooltip-card {
           min-width: 260px;
@@ -2882,6 +3073,7 @@ export default function App() {
                 className="theme-toggle"
                 onClick={toggleTheme}
                 title={theme === "dark" ? "切換淺色模式" : "切換深色模式"}
+                aria-label={theme === "dark" ? "切換淺色模式" : "切換深色模式"}
               >
                 <svg
                   width="14"
@@ -2925,6 +3117,7 @@ export default function App() {
                   <select
                     value={activeYear}
                     onChange={(e) => setActiveYear(e.target.value)}
+                    aria-label="選擇會計年度"
                   >
                     {YEAR_OPTIONS.map((y) => (
                       <option key={y} value={y}>
@@ -2941,6 +3134,7 @@ export default function App() {
                   <select
                     value={activeMonth}
                     onChange={(e) => loadMonth(e.target.value)}
+                    aria-label="選擇月份"
                   >
                     {MONTH_TABS.map((m) => (
                       <option key={m} value={m}>
@@ -2962,7 +3156,7 @@ export default function App() {
               value={money(ytd)}
               delta={
                 ytd > 0
-                  ? `${ytdYoY >= 0 ? "+" : ""}${ytdYoY.toFixed(1)}% vs 去年`
+                  ? `${ytdYoY >= 0 ? "+" : ""}${ytdYoY.toFixed(1)}% vs 去年同期`
                   : "尚無累計資料"
               }
               tone={ytdYoY > 0 ? "green" : ytdYoY < 0 ? "red" : "gray"}
@@ -3141,16 +3335,20 @@ export default function App() {
                     </div>
                     <div
                       className={`exec-pill ${
-                        annualRate >= 100
+                        ytd === 0
+                          ? "neutral"
+                          : paceRate >= 100
                           ? "good"
-                          : annualRate >= 80
+                          : paceRate >= 90
                           ? "warn"
                           : "neutral"
                       }`}
                     >
-                      {annualRate >= 100
+                      {ytd === 0
+                        ? "NO DATA"
+                        : paceRate >= 100
                         ? "AHEAD"
-                        : annualRate >= 80
+                        : paceRate >= 90
                         ? "ON TRACK"
                         : "BEHIND"}
                     </div>
@@ -3167,7 +3365,13 @@ export default function App() {
                       <div className="exec-mini-value">{money(ytd)}</div>
                     </div>
                   </div>
-                  <div className="summary-note">全年進度對照年度總目標</div>
+                  <div className="summary-note">
+                    {ytd > 0
+                      ? `同期目標達成 ${paceRate.toFixed(
+                          1
+                        )}%（僅比較已有實績的月份）· 上方為對照全年總目標的進度`
+                      : "全年進度對照年度總目標"}
+                  </div>
                 </div>
                 <div className="exec-side">
                   <div className="summary-box">
@@ -3177,12 +3381,9 @@ export default function App() {
                         type="text"
                         inputMode="numeric"
                         value={targetGrowthRate}
-                        onChange={(e) =>
-                          setTargetGrowthRate(
-                            String(e.target.value).replace(/[^0-9]/g, "")
-                          )
-                        }
+                        onChange={(e) => changeGrowthRate(e.target.value)}
                         className="input"
+                        aria-label="目標成長率（百分比）"
                         style={{
                           width: 100,
                           textAlign: "right",
@@ -3210,8 +3411,8 @@ export default function App() {
                       className="summary-label"
                       style={{ display: "flex", alignItems: "center", gap: 5 }}
                     >
-                      <Brain size={12} />
-                      AI 預估年度
+                      <TrendingUp size={12} />
+                      預估年度營收
                     </div>
                     <div className="summary-value soft">
                       {money(projectedAnnual)}
@@ -3219,7 +3420,7 @@ export default function App() {
                     <div className="summary-note">
                       {monthsWithRevenue >= 12
                         ? "全年資料已齊，等於實際累計"
-                        : `依 ${monthsWithRevenue} 個月份估算全年`}
+                        : `依 ${monthsWithRevenue} 個月平均推算 · 未含季節性`}
                     </div>
                     {annualTarget > 0 && (
                       <div className="summary-note" style={{ marginTop: 2 }}>
@@ -3370,6 +3571,7 @@ export default function App() {
                               className="input"
                               style={{ width: 110, textAlign: "right" }}
                               value={value}
+                              aria-label={`${labelOf(key)} 廣告費用`}
                               onChange={(e) =>
                                 setAdSpendValue(key, e.target.value)
                               }
@@ -3377,6 +3579,8 @@ export default function App() {
                             <button
                               type="button"
                               className="icon-btn"
+                              title={`刪除 ${labelOf(key)}`}
+                              aria-label={`刪除廣告渠道 ${labelOf(key)}`}
                               onClick={() => removeAdChannel(key)}
                             >
                               <Trash2 size={13} />
@@ -3474,6 +3678,7 @@ export default function App() {
                             className="input"
                             style={{ flex: 1, textAlign: "right" }}
                             value={value}
+                            aria-label={`${labelOf(key)} 廣告費用`}
                             onChange={(e) =>
                               setAdSpendValue(key, e.target.value)
                             }
@@ -3481,6 +3686,8 @@ export default function App() {
                           <button
                             type="button"
                             className="icon-btn"
+                            title={`刪除 ${labelOf(key)}`}
+                            aria-label={`刪除廣告渠道 ${labelOf(key)}`}
                             onClick={() => removeAdChannel(key)}
                           >
                             <Trash2 size={13} />
@@ -3495,6 +3702,7 @@ export default function App() {
                       onChange={(e) => setNewAdChannel(e.target.value)}
                       onKeyDown={(e) => e.key === "Enter" && addAdChannel()}
                       placeholder="新增渠道"
+                      aria-label="新增廣告渠道名稱"
                       className="input"
                     />
                     <button
@@ -3515,7 +3723,10 @@ export default function App() {
                       <Wallet size={14} color="var(--gold-dim)" />
                       訂單管理
                     </div>
-                    <span className="chip">{totalOrdersAllChannels} 單</span>
+                    <span className="chip">
+                      {hasEstimatedOrders ? "≈" : ""}
+                      {totalOrdersAllChannels} 單
+                    </span>
                   </div>
                   <div className="orders-table-head">
                     <div>Channel</div>
@@ -3524,28 +3735,26 @@ export default function App() {
                     <div />
                   </div>
                   <div className="order-list">
-                    {currentChannels.map((key) => {
-                      const amount = totals[key] || 0;
-                      const orderCount = n(
-                        monthData.orderOverrides?.[key] ??
-                          Math.max(Math.round(amount / 10000), 0)
-                      );
+                    {orderInfos.map((o) => {
                       const aov =
-                        orderCount > 0 ? Math.round(amount / orderCount) : 0;
-                      const isFixed = FIXED_CHANNELS.some((c) => c.key === key);
+                        o.count > 0 ? Math.round(o.amount / o.count) : 0;
+                      const isFixed = FIXED_CHANNELS.some(
+                        (c) => c.key === o.key
+                      );
                       return (
-                        <div key={key} className="order-row">
-                          <div className="channel-name">{labelOf(key)}</div>
+                        <div key={o.key} className="order-row">
+                          <div className="channel-name">{labelOf(o.key)}</div>
                           <div>
                             <input
                               type="text"
                               inputMode="numeric"
-                              value={
-                                monthData.orderOverrides?.[key] ??
-                                String(Math.max(Math.round(amount / 10000), 0))
+                              value={o.inputValue}
+                              placeholder={
+                                o.estimate > 0 ? `≈${o.estimate}` : "0"
                               }
+                              aria-label={`${labelOf(o.key)} 訂單數`}
                               onChange={(e) =>
-                                setOrderOverride(key, e.target.value)
+                                setOrderOverride(o.key, e.target.value)
                               }
                               className="input"
                               style={{ textAlign: "center" }}
@@ -3578,7 +3787,9 @@ export default function App() {
                               <button
                                 type="button"
                                 className="icon-btn"
-                                onClick={() => removeRevenueChannel(key)}
+                                title={`刪除 ${labelOf(o.key)}`}
+                                aria-label={`刪除通路 ${labelOf(o.key)}`}
+                                onClick={() => removeRevenueChannel(o.key)}
                               >
                                 <Trash2 size={13} />
                               </button>
@@ -3600,6 +3811,18 @@ export default function App() {
                       <div className="s2">{avgOrderValueAllChannels}</div>
                     </div>
                   </div>
+                  {hasEstimatedOrders && (
+                    <div
+                      style={{
+                        marginTop: 8,
+                        fontSize: 10,
+                        color: "var(--text-dim)",
+                        fontFamily: "'JetBrains Mono', monospace",
+                      }}
+                    >
+                      ※ 未填寫的通路以「營收 ÷ 10,000」推估訂單數
+                    </div>
+                  )}
                   <div
                     style={{
                       marginTop: 14,
@@ -3616,6 +3839,7 @@ export default function App() {
                         e.key === "Enter" && addRevenueChannel()
                       }
                       placeholder="新增渠道"
+                      aria-label="新增營收通路名稱"
                       className="input"
                     />
                     <button
@@ -3639,6 +3863,7 @@ export default function App() {
                       <select
                         value={activeYear}
                         onChange={(e) => setActiveYear(e.target.value)}
+                        aria-label="選擇年份"
                       >
                         {YEAR_OPTIONS.map((y) => (
                           <option key={y} value={y}>
@@ -3668,11 +3893,13 @@ export default function App() {
                       onChange={(e) => setSearch(e.target.value)}
                       onKeyDown={(e) => e.key === "Escape" && setSearch("")}
                       placeholder="搜尋日期"
+                      aria-label="搜尋日期（輸入日數）"
                     />
                     {search && (
                       <button
                         type="button"
                         onClick={() => setSearch("")}
+                        aria-label="清除搜尋"
                         style={{
                           background: "none",
                           border: "none",
@@ -3756,6 +3983,7 @@ export default function App() {
                                     inputMode="numeric"
                                     className="cell-input"
                                     value={String(row[ch.key] ?? "")}
+                                    aria-label={`${row.day}日 ${ch.label} 營收`}
                                     onChange={(e) =>
                                       setRowValue(
                                         row.day,
@@ -3775,6 +4003,9 @@ export default function App() {
                                     inputMode="numeric"
                                     className="cell-input"
                                     value={String(row[key] ?? "")}
+                                    aria-label={`${row.day}日 ${labelOf(
+                                      key
+                                    )} 營收`}
                                     onChange={(e) =>
                                       setRowValue(row.day, key, e.target.value)
                                     }
