@@ -1141,6 +1141,18 @@ function getDaysInMonth(year, monthTab) {
   return new Date(calendarYear, calendarMonth, 0).getDate();
 }
 
+// 加總某月份在指定日期區間內的全通路營收
+function sumMonthRange(monthState, startDay, endDay) {
+  if (!monthState) return 0;
+  const chs = [
+    ...FIXED_CHANNELS.map((c) => c.key),
+    ...(monthState.dynamicChannels || []),
+  ];
+  return (monthState.rows || [])
+    .filter((r) => r.day >= startDay && r.day <= endDay)
+    .reduce((s, row) => s + chs.reduce((rs, k) => rs + n(row[k]), 0), 0);
+}
+
 function buildMonthState(year, month) {
   const monthly = PRELOADED_DATA?.[year]?.[month] || { daily: [], adSpend: {} };
   const rows = Array.from({ length: 31 }, (_, i) => ({
@@ -1437,6 +1449,10 @@ export default function App() {
   const [newRevenueChannel, setNewRevenueChannel] = useState("");
   const [newAdChannel, setNewAdChannel] = useState("");
   const [search, setSearch] = useState("");
+  // 日期區間篩選（如 1~10 號、18~28 號）。切換月份/年份時保留，方便同區間比對；
+  // rangeEnd 預設 31，換月時會自動夾到該月天數
+  const [rangeStart, setRangeStart] = useState(1);
+  const [rangeEnd, setRangeEnd] = useState(31);
   const [targetGrowthRate, setTargetGrowthRate] = useState(() => {
     try {
       return localStorage.getItem("hq_warroom_growth_rate") || "5";
@@ -1831,6 +1847,10 @@ export default function App() {
     [activeYear, activeMonth]
   );
 
+  const effRangeEnd = Math.min(rangeEnd, daysInMonth);
+  const effRangeStart = Math.max(1, Math.min(rangeStart, effRangeEnd));
+  const isFullRange = effRangeStart === 1 && effRangeEnd === daysInMonth;
+
   // 只加總「當月實際存在的天數」，避免隱藏列（如 2 月的 29~31 日）被計入
   const totals = useMemo(() => {
     const base = Object.fromEntries(currentChannels.map((k) => [k, 0]));
@@ -1944,11 +1964,65 @@ export default function App() {
   const gapToTarget = currentRevenue - currentTarget;
 
   const filteredRows = useMemo(() => {
-    const validRows = monthData.rows.filter((r) => r.day <= daysInMonth);
+    const validRows = monthData.rows.filter(
+      (r) =>
+        r.day <= daysInMonth && r.day >= effRangeStart && r.day <= effRangeEnd
+    );
     const q = search.trim();
     if (!q) return validRows;
     return validRows.filter((r) => String(r.day) === q);
-  }, [monthData.rows, search, daysInMonth]);
+  }, [monthData.rows, search, daysInMonth, effRangeStart, effRangeEnd]);
+
+  // 區間彙總（各通路）與比對：同區間 vs 去年同月、vs 上一個月
+  const rangeTotals = useMemo(() => {
+    const base = Object.fromEntries(currentChannels.map((k) => [k, 0]));
+    monthData.rows
+      .filter((r) => r.day >= effRangeStart && r.day <= effRangeEnd)
+      .forEach((r) => {
+        currentChannels.forEach((k) => {
+          base[k] += n(r[k]);
+        });
+      });
+    return { ...base, total: currentChannels.reduce((s, k) => s + base[k], 0) };
+  }, [monthData.rows, monthData.dynamicChannels, effRangeStart, effRangeEnd]);
+
+  const rangeStats = useMemo(() => {
+    const prevYearKey = String(Number(activeYear) - 1);
+    const lastYearState = allYears[prevYearKey]?.[activeMonth];
+    const lastYear = lastYearState
+      ? sumMonthRange(
+          lastYearState,
+          effRangeStart,
+          Math.min(effRangeEnd, getDaysInMonth(prevYearKey, activeMonth))
+        )
+      : 0;
+    const idx = MONTH_TABS.indexOf(activeMonth);
+    const prevMonthTab = idx === 0 ? MONTH_TABS[11] : MONTH_TABS[idx - 1];
+    const prevMonthYear =
+      idx === 0 ? String(Number(activeYear) - 1) : activeYear;
+    const prevMonthState = allYears[prevMonthYear]?.[prevMonthTab];
+    const prevMonth = prevMonthState
+      ? sumMonthRange(
+          prevMonthState,
+          effRangeStart,
+          Math.min(effRangeEnd, getDaysInMonth(prevMonthYear, prevMonthTab))
+        )
+      : 0;
+    return { lastYear, prevMonth, prevMonthTab };
+  }, [allYears, activeYear, activeMonth, effRangeStart, effRangeEnd]);
+
+  const rangeYoY =
+    rangeStats.lastYear > 0
+      ? ((rangeTotals.total - rangeStats.lastYear) / rangeStats.lastYear) * 100
+      : null;
+  const rangeMoM =
+    rangeStats.prevMonth > 0
+      ? ((rangeTotals.total - rangeStats.prevMonth) / rangeStats.prevMonth) *
+        100
+      : null;
+
+  // 表格底部總計：全月時顯示月總計，選了區間就顯示區間總計
+  const displayTotals = isFullRange ? totals : rangeTotals;
 
   // 異常偵測 — 「無營收」只標記已過去的日期，未來日期不視為異常
   const anomalyFlags = useMemo(() => {
@@ -2612,6 +2686,30 @@ export default function App() {
         .field-box select option { background: var(--bg-surface); color: var(--text-primary); }
         .field-box input { min-width: 90px; font-family: 'JetBrains Mono', monospace; font-size: 12px; }
         .field-box input::placeholder { color: var(--text-dim); }
+
+        /* ── Day-range bar ── */
+        .range-bar {
+          display: flex; flex-wrap: wrap; gap: 8px;
+          align-items: center; margin-bottom: 12px;
+        }
+        .range-bar .tab-btn { padding: 6px 12px; font-size: 11px; }
+        .range-compare {
+          margin-left: auto;
+          display: flex; flex-wrap: wrap; gap: 6px; align-items: center;
+        }
+        .range-chip {
+          display: inline-flex; align-items: center; gap: 6px;
+          border: 1px solid var(--border); border-radius: 8px;
+          background: var(--bg-elevated);
+          padding: 6px 10px;
+          font-family: 'JetBrains Mono', monospace;
+          font-size: 11px; font-weight: 700; color: var(--text-secondary);
+        }
+        .range-chip strong { color: var(--text-primary); font-weight: 800; }
+        .range-chip .up { color: var(--green); }
+        .range-chip .down { color: var(--red); }
+        [data-theme="light"] .range-chip { background: #F8FAFC; border-color: #E2E8F0; color: #64748B; }
+        [data-theme="light"] .range-chip strong { color: #111827; }
 
         /* ── Table ── */
         .table-wrap {
@@ -3917,6 +4015,100 @@ export default function App() {
                   </div>
                 </div>
 
+                {/* 日期區間：快選（全月/上中下旬）＋自訂起迄，右側即時比對去年同期與上月同區間 */}
+                <div className="range-bar">
+                  {[
+                    { label: "全月", s: 1, e: 31 },
+                    { label: "1-10", s: 1, e: 10 },
+                    { label: "11-20", s: 11, e: 20 },
+                    { label: `21-${daysInMonth}`, s: 21, e: 31 },
+                  ].map((p) => {
+                    const pEnd = Math.min(p.e, daysInMonth);
+                    const isActive =
+                      effRangeStart === p.s && effRangeEnd === pEnd;
+                    return (
+                      <button
+                        key={p.label}
+                        type="button"
+                        className={`tab-btn ${isActive ? "active" : ""}`}
+                        onClick={() => {
+                          setRangeStart(p.s);
+                          setRangeEnd(p.e);
+                        }}
+                      >
+                        {p.label}
+                      </button>
+                    );
+                  })}
+                  <div className="field-box">
+                    <span>自訂</span>
+                    <select
+                      value={effRangeStart}
+                      aria-label="區間起日"
+                      onChange={(e) => {
+                        const v = Number(e.target.value);
+                        setRangeStart(v);
+                        if (v > effRangeEnd) setRangeEnd(v);
+                      }}
+                    >
+                      {Array.from({ length: daysInMonth }, (_, i) => i + 1).map(
+                        (d) => (
+                          <option key={d} value={d}>
+                            {d}日
+                          </option>
+                        )
+                      )}
+                    </select>
+                    <span>–</span>
+                    <select
+                      value={effRangeEnd}
+                      aria-label="區間迄日"
+                      onChange={(e) => {
+                        const v = Number(e.target.value);
+                        setRangeEnd(v);
+                        if (v < effRangeStart) setRangeStart(v);
+                      }}
+                    >
+                      {Array.from({ length: daysInMonth }, (_, i) => i + 1).map(
+                        (d) => (
+                          <option key={d} value={d}>
+                            {d}日
+                          </option>
+                        )
+                      )}
+                    </select>
+                  </div>
+                  <div className="range-compare">
+                    <div className="range-chip">
+                      {effRangeStart}–{effRangeEnd}日 合計{" "}
+                      <strong>{money(rangeTotals.total)}</strong>
+                    </div>
+                    <div className="range-chip">
+                      去年同期 <strong>{money(rangeStats.lastYear)}</strong>
+                      {rangeYoY !== null ? (
+                        <span className={rangeYoY >= 0 ? "up" : "down"}>
+                          {rangeYoY >= 0 ? "+" : ""}
+                          {rangeYoY.toFixed(1)}%
+                        </span>
+                      ) : (
+                        <span>—</span>
+                      )}
+                    </div>
+                    <div className="range-chip">
+                      上月({rangeStats.prevMonthTab})同區間{" "}
+                      <strong>{money(rangeStats.prevMonth)}</strong>
+                      {rangeMoM !== null ? (
+                        <span className={rangeMoM >= 0 ? "up" : "down"}>
+                          {rangeMoM >= 0 ? "+" : ""}
+                          {rangeMoM.toFixed(1)}%
+                        </span>
+                      ) : (
+                        <span>—</span>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
                 {search && (
                   <div
                     style={{
@@ -4033,8 +4225,16 @@ export default function App() {
                         <tr className="tfoot-row-upgraded">
                           <td className="tfoot-left upgraded">
                             <div className="tfoot-left-wrap">
-                              <div className="tfoot-title">月總計</div>
-                              <div className="tfoot-sub">MONTHLY CLOSING</div>
+                              <div className="tfoot-title">
+                                {isFullRange
+                                  ? "月總計"
+                                  : `區間總計 ${effRangeStart}–${effRangeEnd}日`}
+                              </div>
+                              <div className="tfoot-sub">
+                                {isFullRange
+                                  ? "MONTHLY CLOSING"
+                                  : "RANGE TOTAL"}
+                              </div>
                             </div>
                           </td>
                           {FIXED_CHANNELS.map((ch) => (
@@ -4044,14 +4244,14 @@ export default function App() {
                               style={{ color: ch.color }}
                             >
                               <div className="tfoot-number">
-                                {num(totals[ch.key])}
+                                {num(displayTotals[ch.key])}
                               </div>
                             </td>
                           ))}
                           {monthData.dynamicChannels.map((key) => (
                             <td key={key} className="tfoot-right upgraded">
                               <div className="tfoot-number muted">
-                                {num(totals[key])}
+                                {num(displayTotals[key])}
                               </div>
                             </td>
                           ))}
@@ -4060,7 +4260,7 @@ export default function App() {
                               Total Revenue
                             </div>
                             <div className="tfoot-total-value">
-                              {num(totals.total)}
+                              {num(displayTotals.total)}
                             </div>
                           </td>
                         </tr>
