@@ -93,6 +93,8 @@ const MONTH_TABS = [
 
 const CURRENT_MONTH_TAB = `${new Date().getMonth() + 1}月`;
 
+const WEEKDAY_NAMES = ["日", "一", "二", "三", "四", "五", "六"];
+
 // 會計年度 4月起算：1~3月屬於「前一年度」
 const _now = new Date();
 const CURRENT_FISCAL_YEAR = String(
@@ -1393,14 +1395,18 @@ function TooltipCard({ active, payload, label }) {
             {yoy}%
           </strong>
         </div>
-        <div className="tooltip-row">
-          <span className="tooltip-label">目標</span>
-          <strong className="tooltip-val mono">{num(target)}</strong>
-        </div>
-        <div className="tooltip-row">
-          <span className="tooltip-label">達成率</span>
-          <strong className="tooltip-val mono">{achieve}%</strong>
-        </div>
+        {target > 0 && (
+          <>
+            <div className="tooltip-row">
+              <span className="tooltip-label">目標</span>
+              <strong className="tooltip-val mono">{num(target)}</strong>
+            </div>
+            <div className="tooltip-row">
+              <span className="tooltip-label">達成率</span>
+              <strong className="tooltip-val mono">{achieve}%</strong>
+            </div>
+          </>
+        )}
       </div>
     </div>
   );
@@ -1453,6 +1459,8 @@ export default function App() {
   // rangeEnd 預設 31，換月時會自動夾到該月天數
   const [rangeStart, setRangeStart] = useState(1);
   const [rangeEnd, setRangeEnd] = useState(31);
+  // 趨勢圖通路篩選："all" 或單一通路 key
+  const [trendChannel, setTrendChannel] = useState("all");
   const [targetGrowthRate, setTargetGrowthRate] = useState(() => {
     try {
       return localStorage.getItem("hq_warroom_growth_rate") || "5";
@@ -1851,6 +1859,19 @@ export default function App() {
   const effRangeStart = Math.max(1, Math.min(rangeStart, effRangeEnd));
   const isFullRange = effRangeStart === 1 && effRangeEnd === daysInMonth;
 
+  // 當月每一天對應的星期（0=日、6=六）
+  const dayWeekdayMap = useMemo(() => {
+    const { calendarYear, calendarMonth } = getCalendarYearMonth(
+      activeYear,
+      activeMonth
+    );
+    const map = {};
+    for (let d = 1; d <= daysInMonth; d++) {
+      map[d] = new Date(calendarYear, calendarMonth - 1, d).getDay();
+    }
+    return map;
+  }, [activeYear, activeMonth, daysInMonth]);
+
   // 只加總「當月實際存在的天數」，避免隱藏列（如 2 月的 29~31 日）被計入
   const totals = useMemo(() => {
     const base = Object.fromEntries(currentChannels.map((k) => [k, 0]));
@@ -1908,6 +1929,47 @@ export default function App() {
       };
     });
   }, [allYears, activeYear, targetGrowthRate]);
+
+  // 該年度出現過的所有通路（趨勢圖通路選單用）
+  const yearChannels = useMemo(() => {
+    const set = new Set(FIXED_CHANNELS.map((c) => c.key));
+    const yearState = allYears[activeYear] || {};
+    MONTH_TABS.forEach((m) =>
+      (yearState[m]?.dynamicChannels || []).forEach((k) => set.add(k))
+    );
+    return Array.from(set);
+  }, [allYears, activeYear]);
+
+  // 趨勢圖資料：全部通路時沿用 chartData（KPI 也吃它，口徑不變）；
+  // 選單一通路時另外計算，目標同樣 = 該通路去年同期 × (1 + 成長率)
+  const trendChartData = useMemo(() => {
+    if (trendChannel === "all") return chartData;
+    const factor = 1 + n(targetGrowthRate) / 100;
+    const prevYear = String(Number(activeYear) - 1);
+    const prevYearState = allYears[prevYear];
+    return BASE_TREND.map((item) => {
+      const currentState =
+        allYears[activeYear]?.[item.month] ||
+        buildYearState(activeYear)[item.month];
+      const dim = getDaysInMonth(activeYear, item.month);
+      const actual = currentState.rows
+        .filter((row) => row.day <= dim)
+        .reduce((sum, row) => sum + n(row[trendChannel]), 0);
+      let lastYearActual = 0;
+      if (prevYearState?.[item.month]) {
+        const prevDim = getDaysInMonth(prevYear, item.month);
+        lastYearActual = prevYearState[item.month].rows
+          .filter((row) => row.day <= prevDim)
+          .reduce((sum, row) => sum + n(row[trendChannel]), 0);
+      }
+      return {
+        month: item.month,
+        actual,
+        lastYear: lastYearActual,
+        target: Math.round(lastYearActual * factor),
+      };
+    });
+  }, [chartData, allYears, activeYear, targetGrowthRate, trendChannel]);
 
   const donutData = useMemo(() => {
     const arr = FIXED_CHANNELS.map((c) => ({
@@ -2024,7 +2086,43 @@ export default function App() {
   // 表格底部總計：全月時顯示月總計，選了區間就顯示區間總計
   const displayTotals = isFullRange ? totals : rangeTotals;
 
-  // 異常偵測 — 「無營收」只標記已過去的日期，未來日期不視為異常
+  // 平假日分析：在選定區間內，分別統計平日/週末的日均營收（只計有營收的天）
+  const dayTypeStats = useMemo(() => {
+    let wdSum = 0,
+      wdDays = 0,
+      weSum = 0,
+      weDays = 0;
+    monthData.rows
+      .filter((r) => r.day >= effRangeStart && r.day <= effRangeEnd)
+      .forEach((r) => {
+        const total = currentChannels.reduce((s, k) => s + n(r[k]), 0);
+        if (total <= 0) return;
+        const wd = dayWeekdayMap[r.day];
+        if (wd === 0 || wd === 6) {
+          weSum += total;
+          weDays++;
+        } else {
+          wdSum += total;
+          wdDays++;
+        }
+      });
+    const avgWeekday = wdDays ? Math.round(wdSum / wdDays) : 0;
+    const avgWeekend = weDays ? Math.round(weSum / weDays) : 0;
+    const diffPct =
+      avgWeekday > 0 && avgWeekend > 0
+        ? ((avgWeekend - avgWeekday) / avgWeekday) * 100
+        : null;
+    return { avgWeekday, avgWeekend, wdDays, weDays, diffPct };
+  }, [
+    monthData.rows,
+    monthData.dynamicChannels,
+    effRangeStart,
+    effRangeEnd,
+    dayWeekdayMap,
+  ]);
+
+  // 異常偵測 — 平日/週末分開比較基準（避免正常的週末高峰被誤標「異常高」）；
+  // 「無營收」只標記已過去的日期，未來日期不視為異常
   const anomalyFlags = useMemo(() => {
     const { calendarYear, calendarMonth } = getCalendarYearMonth(
       activeYear,
@@ -2039,30 +2137,48 @@ export default function App() {
       monthStart > today ? 0 : isCurrentMonth ? today.getDate() - 1 : daysInMonth;
     const dailyTotals = monthData.rows
       .filter((r) => r.day <= daysInMonth)
-      .map((row) => ({
-        day: row.day,
-        total: currentChannels.reduce((s, k) => s + n(row[k]), 0),
-      }));
+      .map((row) => {
+        const wd = dayWeekdayMap[row.day];
+        return {
+          day: row.day,
+          isWeekend: wd === 0 || wd === 6,
+          total: currentChannels.reduce((s, k) => s + n(row[k]), 0),
+        };
+      });
     const withRevenue = dailyTotals.filter((d) => d.total > 0);
     if (withRevenue.length < 3) return {};
-    const avg =
-      withRevenue.reduce((s, d) => s + d.total, 0) / withRevenue.length;
+    const avgOf = (list) =>
+      list.length ? list.reduce((s, d) => s + d.total, 0) / list.length : 0;
+    const avgAll = avgOf(withRevenue);
+    const weekdayDays = withRevenue.filter((d) => !d.isWeekend);
+    const weekendDays = withRevenue.filter((d) => d.isWeekend);
+    // 同類型有資料的天數太少時，退回全月平均當基準
+    const avgWeekday = weekdayDays.length >= 3 ? avgOf(weekdayDays) : avgAll;
+    const avgWeekend = weekendDays.length >= 3 ? avgOf(weekendDays) : avgAll;
     const flags = {};
     dailyTotals.forEach((d) => {
+      const base = d.isWeekend ? avgWeekend : avgWeekday;
       if (
         d.total === 0 &&
         d.day <= lastFlaggableDay &&
         withRevenue.length > 5
       ) {
         flags[d.day] = "zero";
-      } else if (d.total > avg * 2.2) {
+      } else if (d.total > base * 2.2) {
         flags[d.day] = "spike";
-      } else if (d.total > 0 && d.total < avg * 0.3) {
+      } else if (d.total > 0 && d.total < base * 0.3) {
         flags[d.day] = "low";
       }
     });
     return flags;
-  }, [monthData.rows, daysInMonth, currentChannels, activeYear, activeMonth]);
+  }, [
+    monthData.rows,
+    daysInMonth,
+    currentChannels,
+    activeYear,
+    activeMonth,
+    dayWeekdayMap,
+  ]);
 
   const handleCellFocus = (e) => {
     e.target.select();
@@ -2711,6 +2827,17 @@ export default function App() {
         [data-theme="light"] .range-chip { background: #F8FAFC; border-color: #E2E8F0; color: #64748B; }
         [data-theme="light"] .range-chip strong { color: #111827; }
 
+        /* ── Weekday badge ── */
+        .weekday-badge {
+          display: inline-block;
+          margin-left: 6px;
+          font-size: 10px;
+          font-weight: 700;
+          color: var(--text-dim);
+        }
+        .weekday-badge.weekend { color: #E5844A; }
+        [data-theme="light"] .weekday-badge.weekend { color: #D97706; }
+
         /* ── Table ── */
         .table-wrap {
           overflow: hidden; border-radius: 14px;
@@ -3300,9 +3427,29 @@ export default function App() {
                 title="營收趨勢總覽"
                 desc="YEARLY TREND · ACTUAL vs TARGET vs LAST YEAR"
                 right={
-                  <div className="chip">
-                    <Eye size={13} />
-                    LIVE
+                  <div
+                    style={{ display: "flex", alignItems: "center", gap: 8 }}
+                  >
+                    <div className="field-box" style={{ padding: "6px 10px" }}>
+                      <span>通路</span>
+                      <select
+                        value={trendChannel}
+                        onChange={(e) => setTrendChannel(e.target.value)}
+                        aria-label="選擇趨勢圖通路"
+                      >
+                        <option value="all">全部</option>
+                        {yearChannels.map((k) => (
+                          <option key={k} value={k}>
+                            {labelOf(k)}
+                          </option>
+                        ))}
+                      </select>
+                      <ChevronDown size={14} color="var(--text-dim)" />
+                    </div>
+                    <div className="chip">
+                      <Eye size={13} />
+                      {trendChannel === "all" ? "LIVE" : labelOf(trendChannel)}
+                    </div>
                   </div>
                 }
               />
@@ -3310,7 +3457,7 @@ export default function App() {
                 <div>
                   <div style={{ height: 380, marginTop: 4 }}>
                     <ResponsiveContainer width="100%" height="100%">
-                      <ComposedChart data={chartData} barCategoryGap={28}>
+                      <ComposedChart data={trendChartData} barCategoryGap={28}>
                         <CartesianGrid
                           vertical={false}
                           stroke={tc.border}
@@ -3360,7 +3507,11 @@ export default function App() {
                         />
                         <Bar
                           dataKey="actual"
-                          fill={tc.gold}
+                          fill={
+                            trendChannel === "all"
+                              ? tc.gold
+                              : colorOf(trendChannel)
+                          }
                           radius={[6, 6, 0, 0]}
                           barSize={26}
                         />
@@ -4106,6 +4257,22 @@ export default function App() {
                         <span>—</span>
                       )}
                     </div>
+                    <div className="range-chip">
+                      平日均 <strong>{money(dayTypeStats.avgWeekday)}</strong>
+                      <span>({dayTypeStats.wdDays}天)</span>
+                    </div>
+                    <div className="range-chip">
+                      週末均 <strong>{money(dayTypeStats.avgWeekend)}</strong>
+                      <span>({dayTypeStats.weDays}天)</span>
+                      {dayTypeStats.diffPct !== null && (
+                        <span
+                          className={dayTypeStats.diffPct >= 0 ? "up" : "down"}
+                        >
+                          {dayTypeStats.diffPct >= 0 ? "+" : ""}
+                          {dayTypeStats.diffPct.toFixed(0)}% vs 平日
+                        </span>
+                      )}
+                    </div>
                   </div>
                 </div>
 
@@ -4162,6 +4329,16 @@ export default function App() {
                             >
                               <td className="sticky-left">
                                 {row.day}
+                                <span
+                                  className={`weekday-badge${
+                                    dayWeekdayMap[row.day] === 0 ||
+                                    dayWeekdayMap[row.day] === 6
+                                      ? " weekend"
+                                      : ""
+                                  }`}
+                                >
+                                  {WEEKDAY_NAMES[dayWeekdayMap[row.day]]}
+                                </span>
                                 {flagLabel && (
                                   <span className={`anomaly-badge ${flag}`}>
                                     {flagLabel}
