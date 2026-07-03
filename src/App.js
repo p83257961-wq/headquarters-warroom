@@ -66,9 +66,9 @@ const FIRESTORE_COLLECTION = "warrooms";
 const FIRESTORE_DOC_ID = "hq-revenue-warroom-v51";
 
 const FIXED_CHANNELS = [
-  { key: "pos", label: "POS", color: "#C9A84C" },
-  { key: "web", label: "網店", color: "#4A9EE5" },
-  { key: "shopee", label: "蝦皮", color: "#E5844A" },
+  { key: "pos", label: "POS", color: "#FBBF24" },
+  { key: "web", label: "網店", color: "#38BDF8" },
+  { key: "shopee", label: "蝦皮", color: "#EF4444" },
 ];
 
 const DEFAULT_DYNAMIC_CHANNELS = ["momo", "other"];
@@ -1082,14 +1082,30 @@ const LABELS = {
   google: "Google",
 };
 
-const COLORS = {
-  pos: "#C9A84C",
-  web: "#4A9EE5",
-  shopee: "#E5844A",
-  momo: "#A97BDB",
-  other: "#E54A7B",
-  fb: "#7A8A9E",
-  google: "#5C8A6E",
+// 通路色票：深淺色各一套（淺色版沿用暖色調低飽和色，深色版用高對比亮色）
+const CHANNEL_COLORS = {
+  dark: {
+    pos: "#FBBF24",
+    web: "#38BDF8",
+    shopee: "#EF4444",
+    momo: "#A78BFA",
+    other: "#8FA3BE",
+    fb: "#3B82F6",
+    google: "#10B981",
+  },
+  light: {
+    pos: "#8A6A2E",
+    web: "#4A7FA5",
+    shopee: "#A63228",
+    momo: "#6B5B8A",
+    other: "#77777D",
+    fb: "#4A7FA5",
+    google: "#2D6A4F",
+  },
+};
+const CHANNEL_FALLBACK = {
+  dark: ["#38BDF8", "#A78BFA", "#FBBF24", "#10B981"],
+  light: ["#4A7FA5", "#6B5B8A", "#8A6A2E", "#2D6A4F"],
 };
 
 /* =========================
@@ -1117,8 +1133,11 @@ const num = (v) =>
   );
 
 const labelOf = (k) => LABELS[k] || k;
-const colorOf = (k, i = 0) =>
-  COLORS[k] || ["#7A8A9E", "#5C8A6E", "#C9A84C", "#A97BDB"][i % 4];
+const colorOf = (k, i = 0, theme = "dark") => {
+  const palette = CHANNEL_COLORS[theme] || CHANNEL_COLORS.dark;
+  const fallback = CHANNEL_FALLBACK[theme] || CHANNEL_FALLBACK.dark;
+  return palette[k] || fallback[i % fallback.length];
+};
 
 function getClientId() {
   const existing = localStorage.getItem(CLIENT_ID_KEY);
@@ -1133,8 +1152,7 @@ function getClientId() {
 function getCalendarYearMonth(year, monthTab) {
   const monthIndex = MONTH_TABS.indexOf(monthTab);
   const calendarMonth = monthIndex < 9 ? monthIndex + 4 : monthIndex - 8;
-  const calendarYear =
-    monthIndex < 9 ? Number(year) : Number(year) + 1;
+  const calendarYear = monthIndex < 9 ? Number(year) : Number(year) + 1;
   return { calendarYear, calendarMonth };
 }
 
@@ -1274,9 +1292,7 @@ function monthHasData(monthState) {
     DEFAULT_DYNAMIC_CHANNELS.join(",")
   )
     return true;
-  if (
-    (monthState.adChannels || []).join(",") !== DEFAULT_AD_CHANNELS.join(",")
-  )
+  if ((monthState.adChannels || []).join(",") !== DEFAULT_AD_CHANNELS.join(","))
     return true;
   return false;
 }
@@ -1375,7 +1391,7 @@ function TooltipCard({ active, payload, label }) {
         <div className="tooltip-row">
           <span
             className="tooltip-label-dot"
-            style={{ background: "#C9A84C" }}
+            style={{ background: "#3B82F6" }}
           />
           <span className="tooltip-label">本年實績</span>
           <strong className="tooltip-val mono">{num(actual)}</strong>
@@ -1830,22 +1846,22 @@ export default function App() {
     () =>
       theme === "dark"
         ? {
-            gold: "#C9A84C",
-            goldDim: "#8B7633",
-            goldGlow: "rgba(201,168,76,0.04)",
-            textDim: "#5A5F6E",
-            border: "#252A36",
-            bgDeep: "#0A0C10",
-            green: "#3ECF8E",
+            gold: "#3B82F6",
+            goldDim: "#60A5FA",
+            goldGlow: "rgba(59,130,246,0.06)",
+            textDim: "#6B7F9E",
+            border: "rgba(255,255,255,0.06)",
+            bgDeep: "#0D1520",
+            green: "#10B981",
           }
         : {
-            gold: "#2E4057",
-            goldDim: "#8896A8",
-            goldGlow: "rgba(46,64,87,0.04)",
-            textDim: "#6B7280",
-            border: "#E3E6EC",
-            bgDeep: "#F4F5F7",
-            green: "#059669",
+            gold: "#1C1C1E",
+            goldDim: "#5C5C60",
+            goldGlow: "rgba(28,28,30,0.04)",
+            textDim: "#77777D",
+            border: "rgba(28,28,30,0.08)",
+            bgDeep: "#F7F6F3",
+            green: "#2D6A4F",
           },
     [theme]
   );
@@ -1916,8 +1932,7 @@ export default function App() {
         lastYearActual = prevState.rows
           .filter((row) => row.day <= prevDim)
           .reduce(
-            (sum, row) =>
-              sum + prevCh.reduce((rs, key) => rs + n(row[key]), 0),
+            (sum, row) => sum + prevCh.reduce((rs, key) => rs + n(row[key]), 0),
             0
           );
       }
@@ -1976,18 +1991,18 @@ export default function App() {
       key: c.key,
       name: c.label,
       value: totals[c.key],
-      color: c.color,
+      color: colorOf(c.key, 0, theme),
     }));
     monthData.dynamicChannels.forEach((k, i) => {
       arr.push({
         key: k,
         name: labelOf(k),
         value: totals[k],
-        color: colorOf(k, i),
+        color: colorOf(k, i, theme),
       });
     });
     return arr.filter((x) => x.value > 0).sort((a, b) => b.value - a.value);
-  }, [monthData.dynamicChannels, totals]);
+  }, [monthData.dynamicChannels, totals, theme]);
 
   const adSpendEntries = useMemo(
     () => monthData.adChannels.map((k) => [k, monthData.adSpend[k] || ""]),
@@ -2134,7 +2149,11 @@ export default function App() {
       today.getFullYear() === calendarYear &&
       today.getMonth() === calendarMonth - 1;
     const lastFlaggableDay =
-      monthStart > today ? 0 : isCurrentMonth ? today.getDate() - 1 : daysInMonth;
+      monthStart > today
+        ? 0
+        : isCurrentMonth
+        ? today.getDate() - 1
+        : daysInMonth;
     const dailyTotals = monthData.rows
       .filter((r) => r.day <= daysInMonth)
       .map((row) => {
@@ -2253,65 +2272,65 @@ export default function App() {
   return (
     <>
       <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700;800&family=Noto+Sans+TC:wght@400;500;700;900&display=swap');
+        @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=DM+Sans:opsz,wght@9..40,300..800&family=Noto+Sans+TC:wght@400;500;700;900&display=swap');
 
         :root, [data-theme="dark"] {
-          --bg-deep: #0A0C10;
-          --bg-surface: #12151C;
-          --bg-elevated: #181C26;
-          --bg-hover: #1E2330;
-          --border: #252A36;
-          --border-bright: #333A4A;
-          --gold: #C9A84C;
-          --gold-dim: #8B7633;
-          --gold-glow: rgba(201,168,76,0.12);
-          --gold-bright: #E8C85A;
-          --text-primary: #E8E6E3;
-          --text-secondary: #8A8F9E;
-          --text-dim: #5A5F6E;
-          --green: #3ECF8E;
-          --green-dim: rgba(62,207,142,0.15);
+          --bg-deep: #0D1520;
+          --bg-surface: #131F2E;
+          --bg-elevated: #1A2840;
+          --bg-hover: #1E2F4A;
+          --border: rgba(255,255,255,0.06);
+          --border-bright: rgba(255,255,255,0.12);
+          --gold: #3B82F6;
+          --gold-dim: #60A5FA;
+          --gold-glow: rgba(59,130,246,0.12);
+          --gold-bright: #60A5FA;
+          --text-primary: #E8EFF8;
+          --text-secondary: #8FA3BE;
+          --text-dim: #6B7F9E;
+          --green: #10B981;
+          --green-dim: rgba(16,185,129,0.12);
           --red: #EF4444;
-          --red-dim: rgba(239,68,68,0.15);
-          --blue: #4A9EE5;
-          --blue-dim: rgba(74,158,229,0.12);
-          --shadow-card: 0 1px 3px rgba(0,0,0,0.3);
-          --table-border: rgba(37,42,54,0.6);
+          --red-dim: rgba(239,68,68,0.12);
+          --blue: #38BDF8;
+          --blue-dim: rgba(56,189,248,0.12);
+          --shadow-card: 0 1px 3px rgba(0,0,0,0.3), 0 1px 2px rgba(0,0,0,0.2);
+          --table-border: rgba(255,255,255,0.05);
         }
 
         [data-theme="light"] {
-          --bg-deep: #F4F5F7;
+          --bg-deep: #F7F6F3;
           --bg-surface: #FFFFFF;
-          --bg-elevated: #FFFFFF;
-          --bg-hover: #F7F8FA;
-          --border: #E3E6EC;
-          --border-bright: #C8CDD6;
-          --gold: #2E4057;
-          --gold-dim: #8896A8;
-          --gold-glow: rgba(46,64,87,0.06);
-          --gold-bright: #1B2A3D;
-          --text-primary: #111827;
-          --text-secondary: #374151;
-          --text-dim: #6B7280;
-          --green: #059669;
-          --green-dim: rgba(5,150,105,0.08);
-          --red: #DC2626;
-          --red-dim: rgba(220,38,38,0.06);
-          --blue: #2563EB;
-          --blue-dim: rgba(37,99,235,0.06);
-          --shadow-card: 0 1px 4px rgba(15,23,42,0.07), 0 1px 2px rgba(15,23,42,0.04);
-          --table-border: #EEF0F3;
+          --bg-elevated: #F2F1EE;
+          --bg-hover: #F9F8F6;
+          --border: rgba(28,28,30,0.08);
+          --border-bright: rgba(28,28,30,0.14);
+          --gold: #1C1C1E;
+          --gold-dim: #5C5C60;
+          --gold-glow: rgba(28,28,30,0.05);
+          --gold-bright: #1C1C1E;
+          --text-primary: #1C1C1E;
+          --text-secondary: #5C5C60;
+          --text-dim: #77777D;
+          --green: #2D6A4F;
+          --green-dim: rgba(45,106,79,0.07);
+          --red: #A63228;
+          --red-dim: rgba(166,50,40,0.07);
+          --blue: #4A7FA5;
+          --blue-dim: rgba(74,127,165,0.07);
+          --shadow-card: 0 1px 0 rgba(28,28,30,0.06), 0 1px 3px rgba(28,28,30,0.03);
+          --table-border: rgba(28,28,30,0.06);
         }
 
         * { box-sizing: border-box; margin: 0; padding: 0; }
         body {
           background: var(--bg-deep);
           color: var(--text-primary);
-          font-family: 'Noto Sans TC', 'JetBrains Mono', sans-serif;
+          font-family: 'DM Sans', 'Noto Sans TC', -apple-system, sans-serif;
         }
         button, input, select { font: inherit; }
 
-        .mono { font-family: 'JetBrains Mono', monospace; }
+        .mono { font-family: 'DM Mono', monospace; }
 
         .app { min-height: 100vh; background: var(--bg-deep); }
         .container { max-width: 1580px; margin: 0 auto; padding: 24px; }
@@ -2330,7 +2349,7 @@ export default function App() {
           display: flex;
           align-items: center;
           gap: 8px;
-          font-family: 'JetBrains Mono', monospace;
+          font-family: 'DM Mono', monospace;
           font-size: 11px;
           font-weight: 700;
           letter-spacing: .18em;
@@ -2349,7 +2368,7 @@ export default function App() {
           margin-top: 8px;
           color: var(--text-dim);
           font-size: 14px;
-          font-family: 'JetBrains Mono', monospace;
+          font-family: 'DM Mono', monospace;
         }
         .topbar-right {
           display: flex;
@@ -2367,7 +2386,7 @@ export default function App() {
           min-width: 132px;
         }
         .selector-label {
-          font-family: 'JetBrains Mono', monospace;
+          font-family: 'DM Mono', monospace;
           font-size: 10px;
           font-weight: 700;
           text-transform: uppercase;
@@ -2387,7 +2406,7 @@ export default function App() {
           background: transparent;
           font-weight: 700;
           color: var(--gold);
-          font-family: 'JetBrains Mono', monospace;
+          font-family: 'DM Mono', monospace;
           cursor: pointer;
         }
         .selector-row select option {
@@ -2403,7 +2422,7 @@ export default function App() {
           border-radius: 8px;
           border: 1px solid var(--border);
           padding: 8px 12px;
-          font-family: 'JetBrains Mono', monospace;
+          font-family: 'DM Mono', monospace;
           font-size: 11px;
           font-weight: 600;
           background: var(--bg-surface);
@@ -2411,8 +2430,8 @@ export default function App() {
         }
         .sync-time { opacity: .5; }
         .sync-idle { color: var(--text-dim); }
-        .sync-syncing { color: var(--blue); border-color: rgba(74,158,229,0.3); background: var(--blue-dim); }
-        .sync-synced { color: var(--green); border-color: rgba(62,207,142,0.3); background: var(--green-dim); }
+        .sync-syncing { color: var(--blue); border-color: rgba(56,189,248,0.3); background: var(--blue-dim); }
+        .sync-synced { color: var(--green); border-color: rgba(16,185,129,0.3); background: var(--green-dim); }
         .sync-error { color: var(--red); border-color: rgba(239,68,68,0.3); background: var(--red-dim); }
         .spin { animation: spin 1s linear infinite; }
         @keyframes spin { to { transform: rotate(360deg); } }
@@ -2427,6 +2446,7 @@ export default function App() {
           background: var(--bg-surface);
           border: 1px solid var(--border);
           border-radius: 16px;
+          box-shadow: var(--shadow-card);
         }
 
         /* ── KPI Card ── */
@@ -2441,7 +2461,7 @@ export default function App() {
           position: absolute;
           left: 0; top: 0;
           width: 100%; height: 3px;
-          background: var(--gold);
+          background: linear-gradient(90deg, var(--gold) 0%, var(--gold-dim) 50%, transparent 100%);
         }
         .kpi-card.primary::before { background: var(--gold); }
         .kpi-card.soft::before { background: var(--green); }
@@ -2456,9 +2476,9 @@ export default function App() {
           border: 1px solid var(--border);
         }
         .kpi-title { font-size: 12px; font-weight: 700; color: var(--text-secondary); }
-        .kpi-helper { font-size: 11px; color: var(--text-dim); margin-top: 4px; font-family: 'JetBrains Mono', monospace; }
+        .kpi-helper { font-size: 11px; color: var(--text-dim); margin-top: 4px; font-family: 'DM Mono', monospace; }
         .kpi-value {
-          font-family: 'JetBrains Mono', monospace;
+          font-family: 'DM Mono', monospace;
           font-size: 42px; line-height: .95;
           font-weight: 800;
           letter-spacing: -0.04em;
@@ -2468,7 +2488,7 @@ export default function App() {
         .kpi-card.neutral .kpi-value { color: var(--gold); }
         .kpi-delta {
           margin-top: 14px;
-          font-family: 'JetBrains Mono', monospace;
+          font-family: 'DM Mono', monospace;
           font-size: 12px; font-weight: 700;
           display: inline-flex; align-items: center; gap: 6px;
         }
@@ -2482,13 +2502,13 @@ export default function App() {
         .section-header { display: flex; justify-content: space-between; gap: 16px; align-items: flex-start; margin-bottom: 16px; }
         .section-title-row { display: flex; align-items: center; gap: 8px; color: var(--gold); }
         .section-title-row h3 { margin: 0; font-size: 15px; font-weight: 800; color: var(--text-primary); }
-        .section-header p { margin: 5px 0 0; font-size: 12px; color: var(--text-dim); font-family: 'JetBrains Mono', monospace; }
+        .section-header p { margin: 5px 0 0; font-size: 12px; color: var(--text-dim); font-family: 'DM Mono', monospace; }
 
         .chip {
           display: inline-flex; align-items: center; gap: 7px;
           border-radius: 8px; border: 1px solid var(--border);
           background: var(--bg-elevated);
-          padding: 6px 10px; font-family: 'JetBrains Mono', monospace;
+          padding: 6px 10px; font-family: 'DM Mono', monospace;
           font-size: 11px; font-weight: 700; color: var(--gold);
         }
 
@@ -2496,7 +2516,7 @@ export default function App() {
         .trend-layout { display: grid; grid-template-columns: minmax(0,1fr) 230px; gap: 16px; min-width: 0; }
         .tab-btn {
           border: 1px solid var(--border); border-radius: 8px;
-          padding: 8px 14px; font-family: 'JetBrains Mono', monospace;
+          padding: 8px 14px; font-family: 'DM Mono', monospace;
           font-size: 12px; font-weight: 700; cursor: pointer;
           background: var(--bg-elevated); color: var(--text-dim);
           transition: .16s ease; white-space: nowrap; flex: 0 0 auto;
@@ -2504,7 +2524,7 @@ export default function App() {
         .tab-btn:hover { background: var(--bg-hover); color: var(--text-secondary); border-color: var(--border-bright); }
         .tab-btn.active {
           background: var(--gold);
-          color: var(--bg-deep);
+          color: #FFFFFF;
           border-color: var(--gold);
         }
 
@@ -2525,20 +2545,20 @@ export default function App() {
           border-radius: 14px 0 0 14px;
           background: var(--border);
         }
-        .stat-soft.accent-amber::before { background: #F59E0B; }
-        .stat-soft.accent-blue::before { background: #3B82F6; }
-        .stat-soft.accent-slate::before { background: #64748B; }
+        .stat-soft.accent-amber::before { background: #FBBF24; }
+        .stat-soft.accent-blue::before { background: #38BDF8; }
+        .stat-soft.accent-slate::before { background: #8FA3BE; }
         .stat-soft.accent-green::before { background: #10B981; }
-        .stat-soft.green { border-color: rgba(62,207,142,0.2); }
+        .stat-soft.green { border-color: rgba(16,185,129,0.2); }
         .stat-soft.gray { border-color: var(--border); }
         .stat-label { display: flex; align-items: center; gap: 7px; font-size: 12px; font-weight: 700; color: var(--text-secondary); }
         .stat-value {
           margin-top: 10px;
-          font-family: 'JetBrains Mono', monospace;
+          font-family: 'DM Mono', monospace;
           font-size: 24px; font-weight: 800; color: var(--text-primary);
           letter-spacing: -0.02em; overflow-wrap: anywhere;
         }
-        .stat-note { margin-top: 5px; font-size: 11px; color: var(--text-dim); font-family: 'JetBrains Mono', monospace; }
+        .stat-note { margin-top: 5px; font-size: 11px; color: var(--text-dim); font-family: 'DM Mono', monospace; }
 
         /* ── Executive Summary ── */
         .exec-summary { display: grid; grid-template-columns: 1fr; gap: 12px; min-width: 0; }
@@ -2550,19 +2570,19 @@ export default function App() {
         .exec-hero-top { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
         .exec-hero-value {
           margin-top: 10px;
-          font-family: 'JetBrains Mono', monospace;
+          font-family: 'DM Mono', monospace;
           font-size: 36px; line-height: .95; font-weight: 800;
           color: var(--gold-bright); letter-spacing: -0.03em; overflow-wrap: anywhere;
         }
         .exec-pill {
           border-radius: 8px; padding: 5px 10px;
-          font-family: 'JetBrains Mono', monospace;
+          font-family: 'DM Mono', monospace;
           font-size: 11px; font-weight: 700;
           border: 1px solid var(--border);
           background: var(--bg-surface); color: var(--text-dim);
         }
-        .exec-pill.good { background: var(--green-dim); border-color: rgba(62,207,142,0.3); color: var(--green); }
-        .exec-pill.warn { background: rgba(201,168,76,0.12); border-color: rgba(201,168,76,0.3); color: var(--gold); }
+        .exec-pill.good { background: var(--green-dim); border-color: rgba(16,185,129,0.3); color: var(--green); }
+        .exec-pill.warn { background: rgba(251,191,36,0.12); border-color: rgba(251,191,36,0.3); color: #FBBF24; }
         .exec-pill.neutral { background: var(--bg-surface); border-color: var(--border); color: var(--text-dim); }
         .exec-hero-grid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 10px; margin-top: 14px; margin-bottom: 10px; }
         .exec-mini-stat {
@@ -2570,13 +2590,13 @@ export default function App() {
           border-radius: 12px; padding: 10px 12px; min-width: 0;
         }
         .exec-mini-label {
-          font-family: 'JetBrains Mono', monospace;
+          font-family: 'DM Mono', monospace;
           font-size: 10px; font-weight: 700; color: var(--text-dim);
           letter-spacing: .1em; text-transform: uppercase;
         }
         .exec-mini-value {
           margin-top: 6px;
-          font-family: 'JetBrains Mono', monospace;
+          font-family: 'DM Mono', monospace;
           font-size: 16px; font-weight: 800; color: var(--text-primary);
           letter-spacing: -0.01em; overflow-wrap: anywhere;
         }
@@ -2588,14 +2608,14 @@ export default function App() {
         }
         .summary-box.light { background: var(--bg-surface); }
         .summary-label {
-          font-family: 'JetBrains Mono', monospace;
+          font-family: 'DM Mono', monospace;
           font-size: 10px; font-weight: 700; color: var(--text-dim);
           letter-spacing: .12em; text-transform: uppercase;
         }
         .summary-inline { display: flex; align-items: end; gap: 8px; margin-top: 12px; }
         .summary-value {
           margin-top: 12px;
-          font-family: 'JetBrains Mono', monospace;
+          font-family: 'DM Mono', monospace;
           font-size: 32px; line-height: .98; font-weight: 800;
           color: var(--text-primary); letter-spacing: -0.04em;
           overflow-wrap: anywhere;
@@ -2609,7 +2629,7 @@ export default function App() {
           border: 1px solid var(--border);
           background: var(--bg-deep);
           padding: 0 12px;
-          font-family: 'JetBrains Mono', monospace;
+          font-family: 'DM Mono', monospace;
           font-size: 13px; font-weight: 600;
           color: var(--text-primary);
           outline: none; width: 100%;
@@ -2626,7 +2646,7 @@ export default function App() {
         .pie-wrap { position: relative; width: 230px; height: 230px; margin: 0 auto; }
         .pie-center { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; pointer-events: none; }
         .pie-center .big {
-          font-family: 'JetBrains Mono', monospace;
+          font-family: 'DM Mono', monospace;
           font-size: 20px; font-weight: 900; color: var(--gold);
           letter-spacing: -0.03em;
         }
@@ -2643,22 +2663,22 @@ export default function App() {
           width: 28px; height: 28px; border-radius: 8px;
           background: var(--bg-deep);
           display: flex; align-items: center; justify-content: center;
-          font-family: 'JetBrains Mono', monospace;
+          font-family: 'DM Mono', monospace;
           color: var(--gold-dim); font-size: 11px; font-weight: 800;
           border: 1px solid var(--border); flex: 0 0 auto;
         }
         .dot { width: 12px; height: 12px; border-radius: 4px; display: inline-block; flex: 0 0 auto; }
         .rank-name { font-weight: 700; font-size: 13px; }
         .rank-right { text-align: right; }
-        .rank-right .v1 { font-family: 'JetBrains Mono', monospace; font-weight: 800; color: var(--text-primary); font-size: 14px; }
-        .rank-right .v2 { font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--text-dim); }
+        .rank-right .v1 { font-family: 'DM Mono', monospace; font-weight: 800; color: var(--text-primary); font-size: 14px; }
+        .rank-right .v2 { font-family: 'DM Mono', monospace; font-size: 11px; color: var(--text-dim); }
 
         /* ── Cost List ── */
         .cost-list { display: flex; flex-direction: column; gap: 10px; }
         .cost-item { background: var(--bg-elevated); border: 1px solid var(--border); border-radius: 14px; padding: 14px; }
         .cost-head { display: flex; justify-content: space-between; gap: 12px; align-items: center; margin-bottom: 10px; }
         .cost-title { font-weight: 800; color: var(--text-primary); font-size: 13px; }
-        .cost-sub { font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--text-dim); margin-top: 3px; }
+        .cost-sub { font-family: 'DM Mono', monospace; font-size: 11px; color: var(--text-dim); margin-top: 3px; }
         .inline-actions { display: flex; align-items: center; gap: 6px; flex: 0 0 auto; }
         .icon-btn {
           border: 1px solid var(--border);
@@ -2683,10 +2703,10 @@ export default function App() {
           margin: 0;
           font-size: 28px; font-weight: 900; letter-spacing: -0.03em;
         }
-        .big-header-note { margin-top: 5px; font-size: 12px; color: var(--text-dim); font-family: 'JetBrains Mono', monospace; }
+        .big-header-note { margin-top: 5px; font-size: 12px; color: var(--text-dim); font-family: 'DM Mono', monospace; }
         .big-header-right { text-align: right; min-width: 300px; }
         .big-revenue {
-          font-family: 'JetBrains Mono', monospace;
+          font-family: 'DM Mono', monospace;
           font-size: 36px; font-weight: 800;
           color: var(--green); margin-top: 6px;
           letter-spacing: -0.03em;
@@ -2708,7 +2728,7 @@ export default function App() {
           background: var(--bg-deep);
           color: var(--gold);
           border-radius: 8px; padding: 3px 8px;
-          font-family: 'JetBrains Mono', monospace;
+          font-family: 'DM Mono', monospace;
           font-size: 10px; font-weight: 700;
         }
         .ad-grid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 8px; }
@@ -2725,7 +2745,7 @@ export default function App() {
           background: var(--bg-surface);
           color: var(--gold);
           border-radius: 8px; padding: 8px 10px;
-          font-family: 'JetBrains Mono', monospace;
+          font-family: 'DM Mono', monospace;
           font-size: 11px; font-weight: 700;
           display: inline-flex; align-items: center; gap: 5px;
           cursor: pointer; transition: .16s ease; flex: 0 0 auto;
@@ -2739,7 +2759,7 @@ export default function App() {
         }
         .orders-table-head {
           border-top: 1px solid var(--border); padding-top: 14px;
-          font-family: 'JetBrains Mono', monospace;
+          font-family: 'DM Mono', monospace;
           font-size: 10px; text-transform: uppercase;
           letter-spacing: .1em; color: var(--text-dim); font-weight: 700;
         }
@@ -2750,7 +2770,7 @@ export default function App() {
           background: var(--bg-deep);
           border: 1px solid var(--border);
           display: flex; align-items: center; justify-content: center;
-          font-family: 'JetBrains Mono', monospace;
+          font-family: 'DM Mono', monospace;
           font-size: 9px; color: var(--text-dim); font-weight: 700;
         }
 
@@ -2765,13 +2785,13 @@ export default function App() {
           border-radius: 14px; padding: 12px 14px; min-width: 0;
         }
         .stat-box .s1 {
-          font-family: 'JetBrains Mono', monospace;
+          font-family: 'DM Mono', monospace;
           font-size: 9px; font-weight: 700; color: var(--text-dim);
           text-transform: uppercase; letter-spacing: .1em;
         }
         .stat-box .s2 {
           margin-top: 5px;
-          font-family: 'JetBrains Mono', monospace;
+          font-family: 'DM Mono', monospace;
           font-size: 24px; font-weight: 800; color: var(--gold);
           letter-spacing: -0.02em; overflow-wrap: anywhere;
         }
@@ -2791,16 +2811,16 @@ export default function App() {
           border-radius: 10px; padding: 8px 10px; flex: 0 0 auto;
         }
         .field-box span {
-          font-family: 'JetBrains Mono', monospace;
+          font-family: 'DM Mono', monospace;
           font-size: 10px; font-weight: 700; color: var(--text-dim);
         }
         .field-box select, .field-box input { border: none; outline: none; background: transparent; color: var(--text-primary); }
         .field-box select {
-          font-family: 'JetBrains Mono', monospace;
+          font-family: 'DM Mono', monospace;
           font-weight: 700; color: var(--gold); cursor: pointer;
         }
         .field-box select option { background: var(--bg-surface); color: var(--text-primary); }
-        .field-box input { min-width: 90px; font-family: 'JetBrains Mono', monospace; font-size: 12px; }
+        .field-box input { min-width: 90px; font-family: 'DM Mono', monospace; font-size: 12px; }
         .field-box input::placeholder { color: var(--text-dim); }
 
         /* ── Day-range bar ── */
@@ -2818,15 +2838,12 @@ export default function App() {
           border: 1px solid var(--border); border-radius: 8px;
           background: var(--bg-elevated);
           padding: 6px 10px;
-          font-family: 'JetBrains Mono', monospace;
+          font-family: 'DM Mono', monospace;
           font-size: 11px; font-weight: 700; color: var(--text-secondary);
         }
         .range-chip strong { color: var(--text-primary); font-weight: 800; }
         .range-chip .up { color: var(--green); }
         .range-chip .down { color: var(--red); }
-        [data-theme="light"] .range-chip { background: #F8FAFC; border-color: #E2E8F0; color: #64748B; }
-        [data-theme="light"] .range-chip strong { color: #111827; }
-
         /* ── Weekday badge ── */
         .weekday-badge {
           display: inline-block;
@@ -2835,8 +2852,8 @@ export default function App() {
           font-weight: 700;
           color: var(--text-dim);
         }
-        .weekday-badge.weekend { color: #E5844A; }
-        [data-theme="light"] .weekday-badge.weekend { color: #D97706; }
+        .weekday-badge.weekend { color: #FBBF24; }
+        [data-theme="light"] .weekday-badge.weekend { color: #8A6A2E; }
 
         /* ── Table ── */
         .table-wrap {
@@ -2855,7 +2872,7 @@ export default function App() {
           background: var(--bg-elevated);
           border-bottom: 1px solid var(--border);
           padding: 12px 14px; text-align: center;
-          font-family: 'JetBrains Mono', monospace;
+          font-family: 'DM Mono', monospace;
           font-weight: 700; font-size: 11px;
           color: var(--text-dim);
           text-transform: uppercase;
@@ -2872,25 +2889,25 @@ export default function App() {
           background: var(--bg-deep);
           text-align: left;
           padding-left: 14px;
-          font-family: 'JetBrains Mono', monospace;
+          font-family: 'DM Mono', monospace;
           font-weight: 800; color: var(--text-dim);
           white-space: nowrap;
         }
         tbody tr:hover .sticky-left { background: var(--bg-hover); }
-        tbody tr.row-spike .sticky-left { background: rgba(245,158,11,0.04); }
+        tbody tr.row-spike .sticky-left { background: rgba(251,191,36,0.04); }
         tbody tr.row-low .sticky-left { background: rgba(239,68,68,0.03); }
-        tbody tr.row-spike:hover .sticky-left { background: rgba(245,158,11,0.08); }
+        tbody tr.row-spike:hover .sticky-left { background: rgba(251,191,36,0.08); }
         tbody tr.row-low:hover .sticky-left { background: rgba(239,68,68,0.06); }
-        [data-theme="light"] tbody tr.row-spike .sticky-left { background: rgba(245,158,11,0.05); }
+        [data-theme="light"] tbody tr.row-spike .sticky-left { background: rgba(251,191,36,0.05); }
         [data-theme="light"] tbody tr.row-low .sticky-left { background: rgba(239,68,68,0.04); }
-        [data-theme="light"] tbody tr.row-spike:hover .sticky-left { background: rgba(245,158,11,0.1); }
+        [data-theme="light"] tbody tr.row-spike:hover .sticky-left { background: rgba(251,191,36,0.1); }
         [data-theme="light"] tbody tr.row-low:hover .sticky-left { background: rgba(239,68,68,0.08); }
         .cell-input {
           width: 100%; height: 36px; border-radius: 8px;
           border: 1px solid var(--border);
           background: var(--bg-surface);
           padding: 0 8px; text-align: right;
-          font-family: 'JetBrains Mono', monospace;
+          font-family: 'DM Mono', monospace;
           font-weight: 700; font-size: 13px;
           color: var(--text-primary);
           outline: none; transition: .16s ease;
@@ -2901,7 +2918,7 @@ export default function App() {
         }
         .subtotal {
           text-align: right;
-          font-family: 'JetBrains Mono', monospace;
+          font-family: 'DM Mono', monospace;
           font-weight: 800; color: var(--text-primary);
         }
         .subtotal.low { color: var(--text-dim); }
@@ -2924,14 +2941,14 @@ export default function App() {
         .tfoot-left-wrap { display: flex; flex-direction: column; gap: 2px; }
         .tfoot-title { font-size: 13px; font-weight: 900; color: var(--gold); }
         .tfoot-sub {
-          font-family: 'JetBrains Mono', monospace;
+          font-family: 'DM Mono', monospace;
           font-size: 10px; color: var(--text-dim);
           font-weight: 600; letter-spacing: .06em;
         }
         .tfoot-right { text-align: right; }
         .tfoot-right.upgraded { vertical-align: middle; }
         .tfoot-number {
-          font-family: 'JetBrains Mono', monospace;
+          font-family: 'DM Mono', monospace;
           font-size: 14px; font-weight: 800;
           letter-spacing: -0.01em;
           color: var(--text-primary);
@@ -2943,13 +2960,13 @@ export default function App() {
           border-radius: 10px;
         }
         .tfoot-total-label {
-          font-family: 'JetBrains Mono', monospace;
+          font-family: 'DM Mono', monospace;
           font-size: 9px; text-transform: uppercase;
           letter-spacing: .1em; color: var(--gold-dim);
           font-weight: 700; margin-bottom: 3px;
         }
         .tfoot-total-value {
-          font-family: 'JetBrains Mono', monospace;
+          font-family: 'DM Mono', monospace;
           font-size: 18px; font-weight: 800;
           color: var(--gold); letter-spacing: -0.02em;
         }
@@ -2958,7 +2975,7 @@ export default function App() {
           margin-top: 12px;
           display: flex; align-items: center; gap: 7px;
           color: var(--text-dim);
-          font-family: 'JetBrains Mono', monospace;
+          font-family: 'DM Mono', monospace;
           font-size: 11px;
         }
 
@@ -2967,14 +2984,14 @@ export default function App() {
           min-width: 260px;
           border-radius: 16px;
           border: 1px solid rgba(255,255,255,0.08);
-          background: #111827;
+          background: #1A2840;
           padding: 18px 20px;
           box-shadow: 0 20px 50px rgba(0,0,0,.45), 0 0 0 1px rgba(0,0,0,.1);
           color: #E5E7EB;
           font-size: 14px;
         }
         .tooltip-month {
-          font-family: 'JetBrains Mono', monospace;
+          font-family: 'DM Mono', monospace;
           font-size: 20px;
           font-weight: 900;
           color: #FFFFFF;
@@ -3007,7 +3024,7 @@ export default function App() {
         }
         .tooltip-label.sec { color: #6B7280; }
         .tooltip-val {
-          font-family: 'JetBrains Mono', monospace;
+          font-family: 'DM Mono', monospace;
           font-size: 14px;
           font-weight: 800;
           color: #FFFFFF;
@@ -3029,7 +3046,7 @@ export default function App() {
           color: #9CA3AF;
         }
         .yoy-pos {
-          font-family: 'JetBrains Mono', monospace;
+          font-family: 'DM Mono', monospace;
           font-size: 15px;
           font-weight: 800;
           color: #34D399;
@@ -3038,7 +3055,7 @@ export default function App() {
           border-radius: 8px;
         }
         .yoy-neg {
-          font-family: 'JetBrains Mono', monospace;
+          font-family: 'DM Mono', monospace;
           font-size: 15px;
           font-weight: 800;
           color: #F87171;
@@ -3056,7 +3073,7 @@ export default function App() {
           display: inline-flex;
           align-items: center;
           gap: 4px;
-          font-family: 'JetBrains Mono', monospace;
+          font-family: 'DM Mono', monospace;
           font-size: 9px;
           font-weight: 800;
           letter-spacing: .04em;
@@ -3066,9 +3083,9 @@ export default function App() {
           vertical-align: middle;
         }
         .anomaly-badge.spike {
-          background: rgba(245,158,11,0.15);
-          color: #F59E0B;
-          border: 1px solid rgba(245,158,11,0.25);
+          background: rgba(251,191,36,0.15);
+          color: #FBBF24;
+          border: 1px solid rgba(251,191,36,0.25);
         }
         .anomaly-badge.low {
           background: rgba(239,68,68,0.12);
@@ -3076,18 +3093,18 @@ export default function App() {
           border: 1px solid rgba(239,68,68,0.2);
         }
         .anomaly-badge.zero {
-          background: rgba(107,114,128,0.12);
-          color: #6B7280;
-          border: 1px solid rgba(107,114,128,0.2);
+          background: rgba(107,127,158,0.12);
+          color: #6B7F9E;
+          border: 1px solid rgba(107,127,158,0.2);
         }
-        [data-theme="light"] .anomaly-badge.spike { background: #FEF3C7; color: #B45309; border-color: #FDE68A; }
-        [data-theme="light"] .anomaly-badge.low { background: #FEE2E2; color: #DC2626; border-color: #FECACA; }
-        [data-theme="light"] .anomaly-badge.zero { background: #F3F4F6; color: #6B7280; border-color: #E5E7EB; }
+        [data-theme="light"] .anomaly-badge.spike { background: rgba(138,106,46,0.08); color: #8A6A2E; border-color: rgba(138,106,46,0.2); }
+        [data-theme="light"] .anomaly-badge.low { background: rgba(166,50,40,0.07); color: #A63228; border-color: rgba(166,50,40,0.18); }
+        [data-theme="light"] .anomaly-badge.zero { background: rgba(28,28,30,0.05); color: #77777D; border-color: rgba(28,28,30,0.1); }
 
-        tr.row-spike { background: rgba(245,158,11,0.04); }
+        tr.row-spike { background: rgba(251,191,36,0.04); }
         tr.row-low { background: rgba(239,68,68,0.03); }
         tr.row-zero { }
-        [data-theme="light"] tr.row-spike { background: rgba(245,158,11,0.05); }
+        [data-theme="light"] tr.row-spike { background: rgba(251,191,36,0.05); }
         [data-theme="light"] tr.row-low { background: rgba(239,68,68,0.04); }
 
         /* ── Responsive ── */
@@ -3156,7 +3173,7 @@ export default function App() {
           background: #FFFFFF;
         }
         .toggle-label {
-          font-family: 'JetBrains Mono', monospace;
+          font-family: 'DM Mono', monospace;
           font-size: 10px;
           font-weight: 700;
           color: var(--text-dim);
@@ -3165,117 +3182,30 @@ export default function App() {
           user-select: none;
         }
 
-        /* ── Light mode overrides ── */
-        [data-theme="light"] .card {
-          box-shadow: var(--shadow-card);
-          border-color: #E8EBF0;
-        }
-        [data-theme="light"] .selector-row select {
-          color: #0F172A;
-        }
-        [data-theme="light"] .kpi-card::before { background: linear-gradient(90deg, #2E4057, #3B5068); }
-        [data-theme="light"] .kpi-card.soft::before { background: linear-gradient(90deg, #059669, #10B981); }
-        [data-theme="light"] .kpi-card.neutral::before { background: linear-gradient(90deg, #6366F1, #818CF8); }
-        [data-theme="light"] .kpi-card.soft .kpi-value { color: #059669; }
-        [data-theme="light"] .kpi-card.neutral .kpi-value { color: #4338CA; }
-        [data-theme="light"] .kpi-value { color: #0F172A; }
-        [data-theme="light"] .eyebrow { color: #6366F1; }
-        [data-theme="light"] .icon-box { background: #F1F5F9; color: #475569; border-color: #E2E8F0; }
-        [data-theme="light"] .chip { background: #F1F5F9; color: #475569; border-color: #E2E8F0; }
-        [data-theme="light"] .tab-btn { background: #F8FAFC; color: #64748B; border-color: #E2E8F0; }
-        [data-theme="light"] .tab-btn:hover { background: #F1F5F9; color: #334155; }
-        [data-theme="light"] .tab-btn.active { background: #0F172A; color: #FFFFFF; border-color: #0F172A; }
-        [data-theme="light"] .exec-hero-value { color: #0F172A; }
-        [data-theme="light"] .exec-pill.good { background: #ECFDF5; border-color: #A7F3D0; color: #059669; }
-        [data-theme="light"] .exec-pill.warn { background: #FEF3C7; border-color: #FDE68A; color: #D97706; }
-        [data-theme="light"] .big-revenue { color: #059669; }
-        [data-theme="light"] .stat-box .s2 { color: #0F172A; }
-        [data-theme="light"] .tfoot-title { color: #0F172A; }
-        [data-theme="light"] .tfoot-total-value { color: #0F172A; }
-        [data-theme="light"] .tfoot-total-label { color: #64748B; }
-        [data-theme="light"] .tfoot-right.upgraded.grand-total { background: #F1F5F9; }
-        [data-theme="light"] tfoot td { border-top-color: #CBD5E1; background: #FAFBFC; }
-        [data-theme="light"] .tfoot-row-upgraded td { background: #FAFBFC; }
-        [data-theme="light"] .small-chip { background: #F1F5F9; color: #334155; border-color: #E2E8F0; }
-        [data-theme="light"] .subtotal.high { color: #0F172A; }
-        [data-theme="light"] .subtotal.mid { color: #475569; }
-        [data-theme="light"] .sidebar-box { background: #FFFFFF; border-color: #E8EBF0; }
-        [data-theme="light"] .sidebar-box.white { background: #FFFFFF; }
-        [data-theme="light"] .mini-card { background: #F8FAFC; border-color: #E8EBF0; }
-        [data-theme="light"] .cost-item { background: #F8FAFC; border-color: #E8EBF0; }
-        [data-theme="light"] .rank-item { background: #F8FAFC; border-color: #E8EBF0; }
-        [data-theme="light"] .stat-soft { background: #F8FAFC; border-color: #E8EBF0; }
-        [data-theme="light"] .stat-soft::before { background: #CBD5E1; }
-        [data-theme="light"] .stat-soft.accent-amber { background: #FFFBEB; border-color: #FDE68A; }
-        [data-theme="light"] .stat-soft.accent-amber::before { background: #F59E0B; }
-        [data-theme="light"] .stat-soft.accent-blue { background: #EFF6FF; border-color: #BFDBFE; }
-        [data-theme="light"] .stat-soft.accent-blue::before { background: #3B82F6; }
-        [data-theme="light"] .stat-soft.accent-slate { background: #F8FAFC; border-color: #E2E8F0; }
-        [data-theme="light"] .stat-soft.accent-slate::before { background: #64748B; }
-        [data-theme="light"] .exec-hero { background: #FAFBFC; }
-        [data-theme="light"] .exec-mini-stat { background: #FFFFFF; border-color: #E8EBF0; }
-        [data-theme="light"] .summary-box { background: #FFFFFF; border-color: #E8EBF0; }
-        [data-theme="light"] .summary-box.light { background: #F8FAFC; }
-        [data-theme="light"] .toggle-track { background: #E2E8F0; border-color: #CBD5E1; }
-        [data-theme="light"] .toggle-thumb { background: #0F172A; left: 22px; }
-        [data-theme="light"] .input { background: #FFFFFF; border-color: #E2E8F0; color: #0F172A; }
-        [data-theme="light"] .input:focus { border-color: #93C5FD; box-shadow: 0 0 0 2px rgba(59,130,246,0.12); }
-        [data-theme="light"] .cell-input { background: #FFFFFF; border-color: #E8EBF0; color: #0F172A; }
-        [data-theme="light"] .cell-input:focus { border-color: #93C5FD; box-shadow: 0 0 0 2px rgba(59,130,246,0.1); }
-        [data-theme="light"] thead th { background: #F8FAFC; border-bottom-color: #E2E8F0; color: #64748B; }
-        [data-theme="light"] .sticky-left { background: #FFFFFF; color: #64748B; }
-        [data-theme="light"] tbody tr:hover .sticky-left { background: #F8FAFC; }
-        [data-theme="light"] .stat-box { background: #F8FAFC; border-color: #E8EBF0; }
-        [data-theme="light"] .rank-num { background: #F1F5F9; color: #64748B; border-color: #E2E8F0; }
-        [data-theme="light"] .icon-btn { background: #FFFFFF; border-color: #E2E8F0; color: #94A3B8; }
-        [data-theme="light"] .btn-add { background: #F8FAFC; color: #334155; border-color: #E2E8F0; }
-        [data-theme="light"] .btn-add:hover { background: #F1F5F9; }
-        [data-theme="light"] .selector-box { background: #FFFFFF; border-color: #E2E8F0; }
-        [data-theme="light"] .field-box { background: #FFFFFF; border-color: #E2E8F0; }
-        [data-theme="light"] .field-box select { color: #0F172A; }
-        [data-theme="light"] .sync-badge { background: #FFFFFF; border-color: #E2E8F0; }
-        [data-theme="light"] .sync-synced { background: #ECFDF5; border-color: #A7F3D0; color: #059669; }
-        [data-theme="light"] .sync-syncing { background: #EFF6FF; border-color: #BFDBFE; color: #2563EB; }
-        [data-theme="light"] .pie-center .big { color: #111827; }
-        [data-theme="light"] .stat-value { color: #111827; }
-        [data-theme="light"] .stat-label { color: #374151; }
-        [data-theme="light"] .stat-note { color: #6B7280; }
-        [data-theme="light"] .kpi-title { color: #374151; }
-        [data-theme="light"] .kpi-helper { color: #6B7280; }
-        [data-theme="light"] .kpi-delta.green { color: #059669; font-weight: 800; }
-        [data-theme="light"] .kpi-delta.red { color: #DC2626; font-weight: 800; }
-        [data-theme="light"] .kpi-delta.gray { color: #6B7280; }
-        [data-theme="light"] .kpi-delta.muted { color: #9CA3AF; }
-        [data-theme="light"] .kpi-card.primary::before { background: linear-gradient(90deg, #2E4057, #3B5068); }
-        [data-theme="light"] .section-title-row { color: #2E4057; }
-        [data-theme="light"] .section-title-row h3 { color: #111827; }
-        [data-theme="light"] .exec-mini-label { color: #6B7280; }
-        [data-theme="light"] .exec-mini-value { color: #111827; }
-        [data-theme="light"] .summary-label { color: #6B7280; }
-        [data-theme="light"] .summary-value { color: #111827; }
-        [data-theme="light"] .summary-value.soft { color: #374151; }
-        [data-theme="light"] .summary-note { color: #9CA3AF; }
-        [data-theme="light"] .rank-name { color: #111827; }
-        [data-theme="light"] .rank-right .v1 { color: #111827; }
-        [data-theme="light"] .rank-right .v2 { color: #6B7280; }
-        [data-theme="light"] .cost-title { color: #111827; }
-        [data-theme="light"] .cost-sub { color: #6B7280; }
-        [data-theme="light"] .progress > div { background: #2E4057; }
-        [data-theme="light"] .channel-name { color: #374151; }
-        [data-theme="light"] .orders-table-head { color: #6B7280; }
-        [data-theme="light"] .sidebar-title { color: #374151; }
-        [data-theme="light"] .mini-label { color: #6B7280; }
-        [data-theme="light"] .tfoot-sub { color: #9CA3AF; }
-        [data-theme="light"] .tfoot-number { color: #111827; }
-        [data-theme="light"] .tfoot-number.muted { color: #374151; }
-        [data-theme="light"] .big-header-title h3 { color: #111827; }
-        [data-theme="light"] .big-header-note { color: #6B7280; }
-        [data-theme="light"] .page-subtitle { color: #6B7280; }
-        [data-theme="light"] .footer-note { color: #9CA3AF; }
+        /* ── Light mode overrides ──
+           大部分顏色由 CSS 變數自動切換，這裡只留變數蓋不到的例外 */
+        [data-theme="light"] .exec-pill.warn { background: rgba(138,106,46,0.1); border-color: rgba(138,106,46,0.25); color: #8A6A2E; }
+        [data-theme="light"] .exec-pill.good { border-color: rgba(45,106,79,0.25); }
+        [data-theme="light"] .stat-soft.accent-amber::before { background: #8A6A2E; }
+        [data-theme="light"] .stat-soft.accent-blue::before { background: #4A7FA5; }
+        [data-theme="light"] .stat-soft.accent-slate::before { background: #77777D; }
+        [data-theme="light"] .stat-soft.green { border-color: rgba(45,106,79,0.2); }
+        [data-theme="light"] .sync-synced { border-color: rgba(45,106,79,0.25); }
+        [data-theme="light"] .sync-syncing { border-color: rgba(74,127,165,0.25); }
+        [data-theme="light"] .sidebar-box { background: var(--bg-surface); }
+        [data-theme="light"] .sticky-left { background: var(--bg-surface); }
+        [data-theme="light"] .cell-input { background: var(--bg-surface); }
+        [data-theme="light"] .input { background: var(--bg-surface); }
+        [data-theme="light"] .table-wrap { background: var(--bg-surface); }
+        [data-theme="light"] .stat-box { background: var(--bg-elevated); }
+        [data-theme="light"] .fixed-badge { background: var(--bg-elevated); }
+        [data-theme="light"] .rank-num { background: var(--bg-elevated); }
+        [data-theme="light"] .small-chip { background: var(--bg-elevated); }
+        [data-theme="light"] .progress { background: var(--bg-elevated); }
 
         /* ── Recharts text ── */
-        [data-theme="dark"] .recharts-text { fill: #5A5F6E !important; font-family: 'JetBrains Mono', monospace !important; }
-        [data-theme="light"] .recharts-text { fill: #6B7280 !important; font-family: 'JetBrains Mono', monospace !important; }
+        [data-theme="dark"] .recharts-text { fill: #6B7F9E !important; font-family: 'DM Mono', monospace !important; }
+        [data-theme="light"] .recharts-text { fill: #77777D !important; font-family: 'DM Mono', monospace !important; }
       `}</style>
 
       <div className="app" data-theme={theme}>
@@ -3470,7 +3400,7 @@ export default function App() {
                           tick={{
                             fill: tc.textDim,
                             fontSize: 11,
-                            fontFamily: "'JetBrains Mono', monospace",
+                            fontFamily: "'DM Mono', monospace",
                           }}
                         />
                         <YAxis
@@ -3482,7 +3412,7 @@ export default function App() {
                           tick={{
                             fill: tc.textDim,
                             fontSize: 11,
-                            fontFamily: "'JetBrains Mono', monospace",
+                            fontFamily: "'DM Mono', monospace",
                           }}
                         />
                         <Tooltip
@@ -3510,7 +3440,7 @@ export default function App() {
                           fill={
                             trendChannel === "all"
                               ? tc.gold
-                              : colorOf(trendChannel)
+                              : colorOf(trendChannel, 0, theme)
                           }
                           radius={[6, 6, 0, 0]}
                           barSize={26}
@@ -3645,7 +3575,7 @@ export default function App() {
                           paddingBottom: 4,
                           color: "var(--gold-dim)",
                           fontWeight: 800,
-                          fontFamily: "'JetBrains Mono', monospace",
+                          fontFamily: "'DM Mono', monospace",
                         }}
                       >
                         %
@@ -3759,7 +3689,7 @@ export default function App() {
                 right={
                   <div
                     style={{
-                      fontFamily: "'JetBrains Mono', monospace",
+                      fontFamily: "'DM Mono', monospace",
                       fontSize: 20,
                       fontWeight: 800,
                       color: "var(--gold)",
@@ -3777,29 +3707,10 @@ export default function App() {
                     ...adSpendEntries.map(([, v]) => n(v)),
                     1
                   );
-                  const barColors = {
-                    shopee: "#E5844A",
-                    google: "#3B82F6",
-                    fb: "#8B5CF6",
-                    momo: "#A97BDB",
-                    other: "#EC4899",
-                    pinkoi: "#F472B6",
-                    panda: "#F59E0B",
-                  };
-                  const fallbackColors = [
-                    "#3B82F6",
-                    "#10B981",
-                    "#F59E0B",
-                    "#8B5CF6",
-                    "#EC4899",
-                    "#06B6D4",
-                  ];
                   let colorIdx = 0;
                   return adSpendEntries.map(([key, value]) => {
                     const numeric = n(value);
-                    const barColor =
-                      barColors[key] ||
-                      fallbackColors[colorIdx++ % fallbackColors.length];
+                    const barColor = colorOf(key, colorIdx++, theme);
                     return (
                       <div key={key} className="cost-item">
                         <div className="cost-head">
@@ -3884,7 +3795,7 @@ export default function App() {
                 </div>
                 <div
                   style={{
-                    fontFamily: "'JetBrains Mono', monospace",
+                    fontFamily: "'DM Mono', monospace",
                     fontSize: 12,
                     color: "var(--text-dim)",
                     fontWeight: 700,
@@ -4017,7 +3928,7 @@ export default function App() {
                                 borderRadius: 8,
                                 padding: "8px 10px",
                                 textAlign: "center",
-                                fontFamily: "'JetBrains Mono', monospace",
+                                fontFamily: "'DM Mono', monospace",
                                 fontWeight: 800,
                                 color: "var(--text-secondary)",
                                 fontSize: 13,
@@ -4066,7 +3977,7 @@ export default function App() {
                         marginTop: 8,
                         fontSize: 10,
                         color: "var(--text-dim)",
-                        fontFamily: "'JetBrains Mono', monospace",
+                        fontFamily: "'DM Mono', monospace",
                       }}
                     >
                       ※ 未填寫的通路以「營收 ÷ 10,000」推估訂單數
@@ -4280,7 +4191,7 @@ export default function App() {
                   <div
                     style={{
                       marginBottom: 8,
-                      fontFamily: "'JetBrains Mono', monospace",
+                      fontFamily: "'DM Mono', monospace",
                       fontSize: 11,
                       color: "var(--text-dim)",
                       fontWeight: 600,
@@ -4297,7 +4208,10 @@ export default function App() {
                         <tr>
                           <th className="sticky-left">日期</th>
                           {FIXED_CHANNELS.map((ch) => (
-                            <th key={ch.key} style={{ color: ch.color }}>
+                            <th
+                              key={ch.key}
+                              style={{ color: colorOf(ch.key, 0, theme) }}
+                            >
                               {ch.label}
                             </th>
                           ))}
@@ -4418,7 +4332,7 @@ export default function App() {
                             <td
                               key={ch.key}
                               className="tfoot-right upgraded"
-                              style={{ color: ch.color }}
+                              style={{ color: colorOf(ch.key, 0, theme) }}
                             >
                               <div className="tfoot-number">
                                 {num(displayTotals[ch.key])}
