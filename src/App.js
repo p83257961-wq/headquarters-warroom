@@ -1152,7 +1152,8 @@ function getClientId() {
 function getCalendarYearMonth(year, monthTab) {
   const monthIndex = MONTH_TABS.indexOf(monthTab);
   const calendarMonth = monthIndex < 9 ? monthIndex + 4 : monthIndex - 8;
-  const calendarYear = monthIndex < 9 ? Number(year) : Number(year) + 1;
+  const calendarYear =
+    monthIndex < 9 ? Number(year) : Number(year) + 1;
   return { calendarYear, calendarMonth };
 }
 
@@ -1292,7 +1293,9 @@ function monthHasData(monthState) {
     DEFAULT_DYNAMIC_CHANNELS.join(",")
   )
     return true;
-  if ((monthState.adChannels || []).join(",") !== DEFAULT_AD_CHANNELS.join(","))
+  if (
+    (monthState.adChannels || []).join(",") !== DEFAULT_AD_CHANNELS.join(",")
+  )
     return true;
   return false;
 }
@@ -1490,9 +1493,9 @@ export default function App() {
   const [cloudConnected, setCloudConnected] = useState(false);
   const [theme, setTheme] = useState(() => {
     try {
-      return localStorage.getItem("hq_warroom_theme") || "dark";
+      return localStorage.getItem("hq_warroom_theme") || "light";
     } catch {
-      return "dark";
+      return "light";
     }
   });
   const toggleTheme = () => {
@@ -1932,7 +1935,8 @@ export default function App() {
         lastYearActual = prevState.rows
           .filter((row) => row.day <= prevDim)
           .reduce(
-            (sum, row) => sum + prevCh.reduce((rs, key) => rs + n(row[key]), 0),
+            (sum, row) =>
+              sum + prevCh.reduce((rs, key) => rs + n(row[key]), 0),
             0
           );
       }
@@ -2149,11 +2153,7 @@ export default function App() {
       today.getFullYear() === calendarYear &&
       today.getMonth() === calendarMonth - 1;
     const lastFlaggableDay =
-      monthStart > today
-        ? 0
-        : isCurrentMonth
-        ? today.getDate() - 1
-        : daysInMonth;
+      monthStart > today ? 0 : isCurrentMonth ? today.getDate() - 1 : daysInMonth;
     const dailyTotals = monthData.rows
       .filter((r) => r.day <= daysInMonth)
       .map((row) => {
