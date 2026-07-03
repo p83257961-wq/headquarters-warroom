@@ -1,15 +1,25 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, {
+  useDeferredValue,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import {
   CalendarDays,
   ChevronDown,
   DollarSign,
+  Download,
   Eye,
   Plus,
+  Redo2,
   Search,
   Sparkles,
   Target,
   Trash2,
   TrendingUp,
+  Undo2,
+  Upload,
   Wallet,
   Zap,
   Cloud,
@@ -38,6 +48,8 @@ import {
   doc,
   onSnapshot,
   setDoc,
+  updateDoc,
+  FieldPath,
   serverTimestamp,
 } from "firebase/firestore";
 
@@ -94,6 +106,70 @@ const MONTH_TABS = [
 const CURRENT_MONTH_TAB = `${new Date().getMonth() + 1}月`;
 
 const WEEKDAY_NAMES = ["日", "一", "二", "三", "四", "五", "六"];
+
+// 台灣國定假日（依實際日曆年，key 為「月-日」）。
+// 只需列「放假日」：影響平/假日分析、異常偵測基準與表格標示；
+// 農曆節日每年不同，政府公布次年行事曆後在此增修即可。
+const TW_HOLIDAYS = {
+  2024: {
+    "1-1": "元旦",
+    "2-8": "春節彈休",
+    "2-9": "除夕",
+    "2-12": "初三",
+    "2-13": "春節補假",
+    "2-14": "春節補假",
+    "2-28": "和平紀念日",
+    "4-4": "兒童節/清明",
+    "4-5": "清明補假",
+    "5-1": "勞動節",
+    "6-10": "端午節",
+    "9-17": "中秋節",
+    "10-10": "國慶日",
+  },
+  2025: {
+    "1-1": "元旦",
+    "1-27": "小年夜彈休",
+    "1-28": "除夕",
+    "1-29": "初一",
+    "1-30": "初二",
+    "1-31": "初三",
+    "2-28": "和平紀念日",
+    "4-3": "清明連假",
+    "4-4": "兒童節/清明",
+    "5-1": "勞動節",
+    "5-30": "端午補假",
+    "9-29": "教師節補假",
+    "10-6": "中秋節",
+    "10-10": "國慶日",
+    "10-24": "光復節補假",
+    "12-25": "行憲紀念日",
+  },
+  2026: {
+    "1-1": "元旦",
+    "2-16": "除夕",
+    "2-17": "初一",
+    "2-18": "初二",
+    "2-19": "初三",
+    "2-20": "春節補假",
+    "2-27": "228補假",
+    "4-3": "兒童節補假",
+    "4-6": "清明補假",
+    "5-1": "勞動節",
+    "6-19": "端午節",
+    "9-25": "中秋節",
+    "9-28": "教師節",
+    "10-9": "國慶補假",
+    "10-26": "光復節補假",
+    "12-25": "行憲紀念日",
+  },
+  2027: {
+    "1-1": "元旦",
+    "3-1": "228補假",
+    "4-5": "清明補假",
+    "10-11": "國慶補假",
+    "12-25": "行憲紀念日",
+  },
+};
 
 // 會計年度 4月起算：1~3月屬於「前一年度」
 const _now = new Date();
@@ -1162,6 +1238,33 @@ function getDaysInMonth(year, monthTab) {
   return new Date(calendarYear, calendarMonth, 0).getDate();
 }
 
+// 查國定假日名稱（依實際日曆年月）
+function getHolidayName(calendarYear, calendarMonth, day) {
+  return TW_HOLIDAYS[calendarYear]?.[`${calendarMonth}-${day}`] || null;
+}
+
+// 觸發瀏覽器下載（CSV / JSON 匯出用）
+function downloadFile(content, filename, type) {
+  const blob = new Blob([content], { type });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+// Excel 貼上的儲存格 → 整數字串；空白或非數字回傳 null（代表略過不覆寫）
+function parsePastedNumber(cell) {
+  const cleaned = String(cell ?? "").replace(/[^0-9.\-]/g, "");
+  if (!cleaned) return null;
+  const v = Math.round(Number(cleaned));
+  if (!Number.isFinite(v) || v < 0) return null;
+  return String(v);
+}
+
 // 加總某月份在指定日期區間內的全通路營收
 function sumMonthRange(monthState, startDay, endDay) {
   if (!monthState) return 0;
@@ -1447,16 +1550,22 @@ function SectionHeader({ icon: Icon, title, desc, right }) {
 }
 
 /* =========================
-   App
+   Dashboard
 ========================= */
-export default function App() {
+function Dashboard() {
   const clientIdRef = useRef(getClientId());
   const hydratedRef = useRef(false);
   const skipNextSaveRef = useRef(false);
   const dirtyRef = useRef(false); // 本機有尚未寫入雲端的變更
+  const dirtyMonthsRef = useRef(new Set()); // 尚未寫入雲端的月份（"年::月"），供逐月增量同步
+  const fullWriteRef = useRef(false); // 需要整份覆寫（匯入還原等大範圍變更）
+  const docExistsRef = useRef(false); // 遠端文件是否存在（不存在時 updateDoc 會失敗，需改走 setDoc）
   const saveTimerRef = useRef(null);
   const undoStackRef = useRef([]);
+  const redoStackRef = useRef([]);
   const isUndoingRef = useRef(false);
+  const handlersRef = useRef({}); // 讓全域鍵盤事件永遠拿到最新的 undo/redo
+  const fileInputRef = useRef(null);
   const tableRef = useRef(null);
 
   const [activeYear, setActiveYear] = useState(DEFAULT_YEAR);
@@ -1474,6 +1583,10 @@ export default function App() {
   const [newRevenueChannel, setNewRevenueChannel] = useState("");
   const [newAdChannel, setNewAdChannel] = useState("");
   const [search, setSearch] = useState("");
+  // undo/redo 堆疊存在 ref，histVer 只是讓按鈕的 disabled 狀態跟著重繪
+  const [histVer, setHistVer] = useState(0);
+  // 目前聚焦中的輸入格 id：聚焦顯示原始數字、失焦顯示千分位
+  const [focusedInput, setFocusedInput] = useState(null);
   // 日期區間篩選（如 1~10 號、18~28 號）。切換月份/年份時保留，方便同區間比對；
   // rangeEnd 預設 31，換月時會自動夾到該月天數
   const [rangeStart, setRangeStart] = useState(1);
@@ -1528,18 +1641,39 @@ export default function App() {
     ensureYearExists(activeYear);
   }, [activeYear]);
 
-  // Undo：只快照「被更動的月份」而非整包年度資料，
-  // 避免每次輸入都深拷貝全部年度造成卡頓
-  const pushUndo = (months) => {
+  // Undo：只快照「被更動的月份」而非整包年度資料。
+  // coalesceKey 讓同一格的連續輸入只留第一筆快照（一格 = 一步復原），
+  // 避免打一個數字吃掉多格歷史；任何新編輯都會清空 redo。
+  const pushUndo = (months, coalesceKey = null) => {
+    redoStackRef.current = [];
+    const stack = undoStackRef.current;
+    const top = stack[stack.length - 1];
+    if (
+      coalesceKey &&
+      top &&
+      top.coalesceKey === coalesceKey &&
+      top.year === activeYear
+    )
+      return;
     undoStackRef.current = [
-      ...undoStackRef.current.slice(-49),
-      { year: activeYear, months: JSON.parse(JSON.stringify(months)) },
+      ...stack.slice(-49),
+      {
+        year: activeYear,
+        months: JSON.parse(JSON.stringify(months)),
+        coalesceKey,
+      },
     ];
+    setHistVer((v) => v + 1);
   };
 
-  const updateActiveMonth = (updater) => {
-    if (!isUndoingRef.current) pushUndo({ [activeMonth]: monthData });
+  const updateActiveMonth = (updater, coalesceKey = null) => {
+    if (!isUndoingRef.current)
+      pushUndo(
+        { [activeMonth]: monthData },
+        coalesceKey ? `${activeMonth}|${coalesceKey}` : null
+      );
     dirtyRef.current = true;
+    dirtyMonthsRef.current.add(`${activeYear}::${activeMonth}`);
     setAllYears((prev) => {
       const safeYear = prev[activeYear] || buildYearState(activeYear);
       return {
@@ -1557,6 +1691,9 @@ export default function App() {
     if (!isUndoingRef.current)
       pushUndo(allYears[activeYear] || buildYearState(activeYear));
     dirtyRef.current = true;
+    MONTH_TABS.forEach((m) =>
+      dirtyMonthsRef.current.add(`${activeYear}::${m}`)
+    );
     setAllYears((prev) => {
       const safeYear = prev[activeYear] || buildYearState(activeYear);
       const nextYear = {};
@@ -1567,11 +1704,13 @@ export default function App() {
     });
   };
 
-  const handleUndo = () => {
-    const entry = undoStackRef.current.pop();
-    if (!entry) return;
+  // 還原 / 重做共用：套用快照、標記待同步月份、跳回該年月
+  const applyHistory = (entry) => {
     isUndoingRef.current = true;
     dirtyRef.current = true;
+    Object.keys(entry.months).forEach((m) =>
+      dirtyMonthsRef.current.add(`${entry.year}::${m}`)
+    );
     setAllYears((prev) => {
       const safeYear = prev[entry.year] || buildYearState(entry.year);
       const restored = { ...safeYear };
@@ -1580,20 +1719,60 @@ export default function App() {
       });
       return { ...prev, [entry.year]: restored };
     });
-    // 跳回被復原的年月，讓使用者看得到復原結果
     setActiveYear(entry.year);
     const monthKeys = Object.keys(entry.months);
     if (monthKeys.length === 1) setActiveMonth(monthKeys[0]);
+    setHistVer((v) => v + 1);
     setTimeout(() => {
       isUndoingRef.current = false;
     }, 50);
   };
 
+  const snapshotMonths = (year, monthKeys) => {
+    const yearState = allYears[year] || buildYearState(year);
+    const out = {};
+    monthKeys.forEach((m) => {
+      out[m] = JSON.parse(JSON.stringify(yearState[m]));
+    });
+    return out;
+  };
+
+  const handleUndo = () => {
+    const entry = undoStackRef.current.pop();
+    if (!entry) return;
+    redoStackRef.current.push({
+      year: entry.year,
+      months: snapshotMonths(entry.year, Object.keys(entry.months)),
+    });
+    applyHistory(entry);
+  };
+
+  const handleRedo = () => {
+    const entry = redoStackRef.current.pop();
+    if (!entry) return;
+    undoStackRef.current.push({
+      year: entry.year,
+      months: snapshotMonths(entry.year, Object.keys(entry.months)),
+      coalesceKey: null,
+    });
+    applyHistory(entry);
+  };
+
+  // 每次 render 更新 ref，全域快捷鍵才不會拿到過期的 closure
+  useEffect(() => {
+    handlersRef.current = { undo: handleUndo, redo: handleRedo };
+  });
+
   useEffect(() => {
     const onKeyDown = (e) => {
-      if ((e.ctrlKey || e.metaKey) && e.key === "z" && !e.shiftKey) {
+      if (!(e.ctrlKey || e.metaKey)) return;
+      const k = e.key.toLowerCase();
+      if (k === "z" && !e.shiftKey) {
         e.preventDefault();
-        handleUndo();
+        handlersRef.current.undo?.();
+      } else if ((k === "z" && e.shiftKey) || k === "y") {
+        e.preventDefault();
+        handlersRef.current.redo?.();
       }
     };
     window.addEventListener("keydown", onKeyDown);
@@ -1601,14 +1780,17 @@ export default function App() {
   }, []);
 
   const setRowValue = (day, key, value) => {
-    updateActiveMonth((prev) => ({
-      ...prev,
-      rows: prev.rows.map((r) =>
-        r.day === day
-          ? { ...r, [key]: String(value).replace(/[^0-9]/g, "") }
-          : r
-      ),
-    }));
+    updateActiveMonth(
+      (prev) => ({
+        ...prev,
+        rows: prev.rows.map((r) =>
+          r.day === day
+            ? { ...r, [key]: String(value).replace(/[^0-9]/g, "") }
+            : r
+        ),
+      }),
+      `r-${day}-${key}`
+    );
   };
 
   const addRevenueChannel = () => {
@@ -1659,10 +1841,16 @@ export default function App() {
   };
 
   const setAdSpendValue = (key, value) => {
-    updateActiveMonth((prev) => ({
-      ...prev,
-      adSpend: { ...prev.adSpend, [key]: String(value).replace(/[^0-9]/g, "") },
-    }));
+    updateActiveMonth(
+      (prev) => ({
+        ...prev,
+        adSpend: {
+          ...prev.adSpend,
+          [key]: String(value).replace(/[^0-9]/g, ""),
+        },
+      }),
+      `a-${key}`
+    );
   };
 
   const addAdChannel = () => {
@@ -1701,13 +1889,16 @@ export default function App() {
   };
 
   const setOrderOverride = (key, value) => {
-    updateActiveMonth((prev) => ({
-      ...prev,
-      orderOverrides: {
-        ...(prev.orderOverrides || {}),
-        [key]: String(value).replace(/[^0-9]/g, ""),
-      },
-    }));
+    updateActiveMonth(
+      (prev) => ({
+        ...prev,
+        orderOverrides: {
+          ...(prev.orderOverrides || {}),
+          [key]: String(value).replace(/[^0-9]/g, ""),
+        },
+      }),
+      `o-${key}`
+    );
   };
 
   const changeGrowthRate = (value) => {
@@ -1748,10 +1939,12 @@ export default function App() {
         try {
           if (snap.metadata.hasPendingWrites) return;
           if (!snap.exists()) {
+            docExistsRef.current = false;
             hydratedRef.current = true;
             setSyncState("idle");
             return;
           }
+          docExistsRef.current = true;
           const remote = snap.data() || {};
           const isOwnEcho = remote.updatedBy === clientIdRef.current;
           if (hydratedRef.current && isOwnEcho) {
@@ -1807,7 +2000,9 @@ export default function App() {
     } catch {}
   }, [targetGrowthRate]);
 
-  // Firestore save（整份覆寫 + 裁掉空白年度，控制文件大小在 1MiB 上限內）
+  // Firestore save：只把「有變更的月份」用 FieldPath 增量寫入，
+  // 多裝置同時編輯不同月份時不會互相覆蓋整份文件；
+  // 匯入還原或文件不存在時才整份 setDoc。
   useEffect(() => {
     if (!authReady || !hydratedRef.current) return;
     if (skipNextSaveRef.current) {
@@ -1816,22 +2011,47 @@ export default function App() {
     }
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     saveTimerRef.current = setTimeout(async () => {
+      const pendingMonths = Array.from(dirtyMonthsRef.current);
+      const fullWrite = fullWriteRef.current || !docExistsRef.current;
       try {
         setSyncState("syncing");
         dirtyRef.current = false;
+        dirtyMonthsRef.current = new Set();
         const ref = doc(fbDb, FIRESTORE_COLLECTION, FIRESTORE_DOC_ID);
-        await setDoc(ref, {
-          allYears: pruneAllYears(allYears),
-          targetGrowthRate,
-          updatedAt: serverTimestamp(),
-          updatedAtClient: new Date().toISOString(),
-          updatedBy: clientIdRef.current,
-        });
+        if (fullWrite) {
+          await setDoc(ref, {
+            allYears: pruneAllYears(allYears),
+            targetGrowthRate,
+            updatedAt: serverTimestamp(),
+            updatedAtClient: new Date().toISOString(),
+            updatedBy: clientIdRef.current,
+          });
+          fullWriteRef.current = false;
+          docExistsRef.current = true;
+        } else {
+          // FieldPath 才能容納「2026」「7月」這類非識別字欄位名
+          const args = [];
+          pendingMonths.forEach((k) => {
+            const [y, m] = k.split("::");
+            const monthVal = allYears[y]?.[m];
+            if (monthVal) args.push(new FieldPath("allYears", y, m), monthVal);
+          });
+          args.push(new FieldPath("targetGrowthRate"), targetGrowthRate);
+          args.push(new FieldPath("updatedAt"), serverTimestamp());
+          args.push(
+            new FieldPath("updatedAtClient"),
+            new Date().toISOString()
+          );
+          args.push(new FieldPath("updatedBy"), clientIdRef.current);
+          await updateDoc(ref, ...args);
+        }
         setSyncState("synced");
         setLastSyncedAt(new Date().toLocaleString("zh-TW"));
       } catch (err) {
         console.error(err);
+        if (err?.code === "not-found") docExistsRef.current = false;
         dirtyRef.current = true;
+        pendingMonths.forEach((k) => dirtyMonthsRef.current.add(k));
         setSyncState("error");
       }
     }, 700);
@@ -1840,10 +2060,11 @@ export default function App() {
     };
   }, [allYears, targetGrowthRate, authReady]);
 
-  const currentChannels = [
-    ...FIXED_CHANNELS.map((c) => c.key),
-    ...monthData.dynamicChannels,
-  ];
+  // memo 化：讓依賴它的 useMemo 不會因為每次 render 產生新陣列而失效
+  const currentChannels = useMemo(
+    () => [...FIXED_CHANNELS.map((c) => c.key), ...monthData.dynamicChannels],
+    [monthData.dynamicChannels]
+  );
 
   const tc = useMemo(
     () =>
@@ -1891,6 +2112,33 @@ export default function App() {
     return map;
   }, [activeYear, activeMonth, daysInMonth]);
 
+  // 當月國定假日（day → 假日名）
+  const holidayMap = useMemo(() => {
+    const { calendarYear, calendarMonth } = getCalendarYearMonth(
+      activeYear,
+      activeMonth
+    );
+    const map = {};
+    for (let d = 1; d <= daysInMonth; d++) {
+      const name = getHolidayName(calendarYear, calendarMonth, d);
+      if (name) map[d] = name;
+    }
+    return map;
+  }, [activeYear, activeMonth, daysInMonth]);
+
+  // 檢視的月份若是「現在這個月」，回傳今天的日期，用於高亮與自動捲動
+  const todayDay = useMemo(() => {
+    const { calendarYear, calendarMonth } = getCalendarYearMonth(
+      activeYear,
+      activeMonth
+    );
+    const t = new Date();
+    return t.getFullYear() === calendarYear &&
+      t.getMonth() + 1 === calendarMonth
+      ? t.getDate()
+      : null;
+  }, [activeYear, activeMonth]);
+
   // 只加總「當月實際存在的天數」，避免隱藏列（如 2 月的 29~31 日）被計入
   const totals = useMemo(() => {
     const base = Object.fromEntries(currentChannels.map((k) => [k, 0]));
@@ -1902,7 +2150,7 @@ export default function App() {
         });
       });
     return { ...base, total: currentChannels.reduce((s, k) => s + base[k], 0) };
-  }, [monthData.rows, monthData.dynamicChannels, daysInMonth]);
+  }, [monthData.rows, currentChannels, daysInMonth]);
 
   const chartData = useMemo(() => {
     const factor = 1 + n(targetGrowthRate) / 100;
@@ -2008,6 +2256,10 @@ export default function App() {
     return arr.filter((x) => x.value > 0).sort((a, b) => b.value - a.value);
   }, [monthData.dynamicChannels, totals, theme]);
 
+  // 圖表以低優先權更新：連續輸入時先保持打字流暢，圖表隨後跟上
+  const deferredTrendData = useDeferredValue(trendChartData);
+  const deferredDonutData = useDeferredValue(donutData);
+
   const adSpendEntries = useMemo(
     () => monthData.adChannels.map((k) => [k, monthData.adSpend[k] || ""]),
     [monthData.adChannels, monthData.adSpend]
@@ -2044,14 +2296,72 @@ export default function App() {
   const annualRate = annualTarget ? (ytd / annualTarget) * 100 : 0;
   const gapToTarget = currentRevenue - currentTarget;
 
+  // ROAS／MER — 歸因規則（老闆定案）：
+  //   網店 ROAS = 網店營收 ÷ (Google + FB/IG 廣告費)
+  //   蝦皮 ROAS = 蝦皮營收 ÷ 蝦皮廣告費
+  //   MOMO ROAS = MOMO營收 ÷ MOMO廣告費
+  //   POS 與廣告無關，不做歸因；MER = 總營收 ÷ 總廣告費
+  const roasStats = useMemo(() => {
+    const spendOf = (k) => n(monthData.adSpend?.[k]);
+    const totalSpend = (monthData.adChannels || []).reduce(
+      (s, k) => s + spendOf(k),
+      0
+    );
+    const webSpend = spendOf("google") + spendOf("fb");
+    const shopeeSpend = spendOf("shopee");
+    const momoSpend = spendOf("momo");
+    const ratio = (rev, sp) => (sp > 0 ? rev / sp : null);
+    return {
+      totalSpend,
+      mer: ratio(currentRevenue, totalSpend),
+      web: ratio(totals.web || 0, webSpend),
+      shopee: ratio(totals.shopee || 0, shopeeSpend),
+      momo: ratio(totals.momo || 0, momoSpend),
+      adPct:
+        currentRevenue > 0 && totalSpend > 0
+          ? (totalSpend / currentRevenue) * 100
+          : null,
+    };
+  }, [monthData.adSpend, monthData.adChannels, totals, currentRevenue]);
+
+  const roasFmt = (v) => (v === null ? "—" : v.toFixed(1) + "x");
+
+  // 達標配速：本月剩幾天、每天要做多少才能達標
+  const paceInfo = useMemo(() => {
+    const { calendarYear, calendarMonth } = getCalendarYearMonth(
+      activeYear,
+      activeMonth
+    );
+    const today = new Date();
+    const ty = today.getFullYear();
+    const tm = today.getMonth() + 1;
+    const isCurrent = ty === calendarYear && tm === calendarMonth;
+    const isPast =
+      calendarYear < ty || (calendarYear === ty && calendarMonth < tm);
+    if (!isCurrent) return { status: isPast ? "past" : "future" };
+    const d = today.getDate();
+    const remaining = Math.max(daysInMonth - d + 1, 1);
+    const needDaily = Math.max(
+      0,
+      Math.ceil((currentTarget - currentRevenue) / remaining)
+    );
+    return {
+      status: "current",
+      remaining,
+      needDaily,
+      timePct: (d / daysInMonth) * 100,
+    };
+  }, [activeYear, activeMonth, daysInMonth, currentTarget, currentRevenue]);
+
+  // 搜尋改為「包含」比對：輸入 1 會列出 1、10~19、21、31
   const filteredRows = useMemo(() => {
     const validRows = monthData.rows.filter(
       (r) =>
         r.day <= daysInMonth && r.day >= effRangeStart && r.day <= effRangeEnd
     );
-    const q = search.trim();
+    const q = search.trim().replace(/[^0-9]/g, "");
     if (!q) return validRows;
-    return validRows.filter((r) => String(r.day) === q);
+    return validRows.filter((r) => String(r.day).includes(q));
   }, [monthData.rows, search, daysInMonth, effRangeStart, effRangeEnd]);
 
   // 區間彙總（各通路）與比對：同區間 vs 去年同月、vs 上一個月
@@ -2065,7 +2375,7 @@ export default function App() {
         });
       });
     return { ...base, total: currentChannels.reduce((s, k) => s + base[k], 0) };
-  }, [monthData.rows, monthData.dynamicChannels, effRangeStart, effRangeEnd]);
+  }, [monthData.rows, currentChannels, effRangeStart, effRangeEnd]);
 
   const rangeStats = useMemo(() => {
     const prevYearKey = String(Number(activeYear) - 1);
@@ -2105,7 +2415,7 @@ export default function App() {
   // 表格底部總計：全月時顯示月總計，選了區間就顯示區間總計
   const displayTotals = isFullRange ? totals : rangeTotals;
 
-  // 平假日分析：在選定區間內，分別統計平日/週末的日均營收（只計有營收的天）
+  // 平假日分析：週六日「加上國定假日」都算假日，分別統計日均（只計有營收的天）
   const dayTypeStats = useMemo(() => {
     let wdSum = 0,
       wdDays = 0,
@@ -2117,7 +2427,8 @@ export default function App() {
         const total = currentChannels.reduce((s, k) => s + n(r[k]), 0);
         if (total <= 0) return;
         const wd = dayWeekdayMap[r.day];
-        if (wd === 0 || wd === 6) {
+        const isOff = wd === 0 || wd === 6 || !!holidayMap[r.day];
+        if (isOff) {
           weSum += total;
           weDays++;
         } else {
@@ -2134,13 +2445,15 @@ export default function App() {
     return { avgWeekday, avgWeekend, wdDays, weDays, diffPct };
   }, [
     monthData.rows,
-    monthData.dynamicChannels,
+    currentChannels,
     effRangeStart,
     effRangeEnd,
     dayWeekdayMap,
+    holidayMap,
   ]);
 
-  // 異常偵測 — 平日/週末分開比較基準（避免正常的週末高峰被誤標「異常高」）；
+  // 異常偵測 — 平日/假日（含國定假日）分開比較基準，
+  // 避免正常的週末或連假高峰被誤標「異常高」；
   // 「無營收」只標記已過去的日期，未來日期不視為異常
   const anomalyFlags = useMemo(() => {
     const { calendarYear, calendarMonth } = getCalendarYearMonth(
@@ -2160,7 +2473,7 @@ export default function App() {
         const wd = dayWeekdayMap[row.day];
         return {
           day: row.day,
-          isWeekend: wd === 0 || wd === 6,
+          isOff: wd === 0 || wd === 6 || !!holidayMap[row.day],
           total: currentChannels.reduce((s, k) => s + n(row[k]), 0),
         };
       });
@@ -2169,14 +2482,14 @@ export default function App() {
     const avgOf = (list) =>
       list.length ? list.reduce((s, d) => s + d.total, 0) / list.length : 0;
     const avgAll = avgOf(withRevenue);
-    const weekdayDays = withRevenue.filter((d) => !d.isWeekend);
-    const weekendDays = withRevenue.filter((d) => d.isWeekend);
+    const weekdayDays = withRevenue.filter((d) => !d.isOff);
+    const offDays = withRevenue.filter((d) => d.isOff);
     // 同類型有資料的天數太少時，退回全月平均當基準
     const avgWeekday = weekdayDays.length >= 3 ? avgOf(weekdayDays) : avgAll;
-    const avgWeekend = weekendDays.length >= 3 ? avgOf(weekendDays) : avgAll;
+    const avgOffday = offDays.length >= 3 ? avgOf(offDays) : avgAll;
     const flags = {};
     dailyTotals.forEach((d) => {
-      const base = d.isWeekend ? avgWeekend : avgWeekday;
+      const base = d.isOff ? avgOffday : avgWeekday;
       if (
         d.total === 0 &&
         d.day <= lastFlaggableDay &&
@@ -2197,10 +2510,42 @@ export default function App() {
     activeYear,
     activeMonth,
     dayWeekdayMap,
+    holidayMap,
   ]);
 
-  const handleCellFocus = (e) => {
-    e.target.select();
+  // 月份頁籤資料指示點：該月任一儲存格有值就亮
+  const monthsWithData = useMemo(() => {
+    const set = new Set();
+    const yearState = allYears[activeYear];
+    if (!yearState) return set;
+    MONTH_TABS.forEach((m) => {
+      const md = yearState[m];
+      if (
+        md &&
+        (md.rows || []).some((r) =>
+          Object.keys(r).some(
+            (k) => k !== "day" && String(r[k] ?? "").trim() !== ""
+          )
+        )
+      )
+        set.add(m);
+    });
+    return set;
+  }, [allYears, activeYear]);
+
+  // 聚焦顯示原始數字並全選；失焦回千分位顯示
+  const handleCellFocus = (e, id) => {
+    setFocusedInput(id);
+    const el = e.target;
+    requestAnimationFrame(() => el.select());
+  };
+
+  const handleCellBlur = () => setFocusedInput(null);
+
+  const displayCell = (raw, id) => {
+    const s = String(raw ?? "");
+    if (focusedInput === id || s === "") return s;
+    return num(s);
   };
 
   const handleCellKeyDown = (e) => {
@@ -2231,6 +2576,153 @@ export default function App() {
     }
   };
 
+  // Excel 多格貼上：換行 = 往下天數、Tab = 往右通路；
+  // 空白格略過不覆寫，超出當月天數或通路數的部分自動丟棄
+  const handleCellPaste = (day, startKey) => (e) => {
+    const text = e.clipboardData?.getData("text") ?? "";
+    if (!/[\n\t]/.test(text.trim())) return; // 單一數值走預設貼上
+    e.preventDefault();
+    const lines = text.replace(/\r/g, "").split("\n");
+    while (lines.length && lines[lines.length - 1].trim() === "") lines.pop();
+    if (!lines.length) return;
+    const startCol = currentChannels.indexOf(startKey);
+    if (startCol === -1) return;
+    updateActiveMonth((prev) => ({
+      ...prev,
+      rows: prev.rows.map((r) => {
+        const li = r.day - day;
+        if (li < 0 || li >= lines.length || r.day > daysInMonth) return r;
+        const next = { ...r };
+        lines[li].split("\t").forEach((cell, ci) => {
+          const ch = currentChannels[startCol + ci];
+          if (!ch) return;
+          const v = parsePastedNumber(cell);
+          if (v !== null) next[ch] = v;
+        });
+        return next;
+      }),
+    }));
+  };
+
+  // 檢視當月時自動捲到今天附近
+  useEffect(() => {
+    if (!todayDay) return;
+    const timer = setTimeout(() => {
+      const table = tableRef.current;
+      const scroller = table?.parentElement;
+      const rowEl = table?.querySelector('tr[data-today="true"]');
+      if (scroller && rowEl) {
+        scroller.scrollTop = Math.max(
+          0,
+          rowEl.offsetTop - scroller.clientHeight / 2
+        );
+      }
+    }, 120);
+    return () => clearTimeout(timer);
+  }, [todayDay, activeYear, activeMonth]);
+
+  // 匯出當月每日表格為 CSV（含 BOM，Excel 直接開不亂碼）
+  const exportCsv = () => {
+    const { calendarYear, calendarMonth } = getCalendarYearMonth(
+      activeYear,
+      activeMonth
+    );
+    const header = ["日期", "星期", ...currentChannels.map(labelOf), "小計"];
+    const lines = [header.join(",")];
+    monthData.rows
+      .filter((r) => r.day <= daysInMonth)
+      .forEach((r) => {
+        const subtotal = currentChannels.reduce((s, k) => s + n(r[k]), 0);
+        lines.push(
+          [
+            `${calendarYear}/${calendarMonth}/${r.day}`,
+            WEEKDAY_NAMES[dayWeekdayMap[r.day]] +
+              (holidayMap[r.day] ? `(${holidayMap[r.day]})` : ""),
+            ...currentChannels.map((k) => n(r[k])),
+            subtotal,
+          ].join(",")
+        );
+      });
+    lines.push(
+      ["月總計", "", ...currentChannels.map((k) => totals[k]), totals.total].join(
+        ","
+      )
+    );
+    downloadFile(
+      "﻿" + lines.join("\n"),
+      `營收_${activeYear}年度_${activeMonth}.csv`,
+      "text/csv;charset=utf-8"
+    );
+  };
+
+  // 匯出完整 JSON 備份（所有年度＋成長率設定）
+  const exportJson = () => {
+    downloadFile(
+      JSON.stringify(
+        {
+          app: "hq-revenue-warroom",
+          version: 1,
+          exportedAt: new Date().toISOString(),
+          targetGrowthRate,
+          allYears: pruneAllYears(allYears),
+        },
+        null,
+        2
+      ),
+      `營收戰情室備份_${new Date().toISOString().slice(0, 10)}.json`,
+      "application/json"
+    );
+  };
+
+  // 從 JSON 備份還原：整份覆蓋本機與雲端（fullWrite），並清空復原歷史
+  const handleImportFile = (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const parsed = JSON.parse(String(reader.result));
+        if (!parsed || typeof parsed !== "object" || !parsed.allYears)
+          throw new Error("invalid backup");
+        if (
+          !window.confirm(
+            `確定要用備份還原？將覆蓋目前所有資料（含雲端）。\n備份時間：${
+              parsed.exportedAt
+                ? new Date(parsed.exportedAt).toLocaleString("zh-TW")
+                : "未知"
+            }`
+          )
+        )
+          return;
+        undoStackRef.current = [];
+        redoStackRef.current = [];
+        setHistVer((v) => v + 1);
+        dirtyRef.current = true;
+        fullWriteRef.current = true;
+        setAllYears(sanitizeAllYears(parsed.allYears));
+        if (parsed.targetGrowthRate != null) {
+          setTargetGrowthRate(
+            String(parsed.targetGrowthRate).replace(/[^0-9]/g, "") || "5"
+          );
+        }
+      } catch (err) {
+        console.error(err);
+        window.alert("備份檔格式錯誤，無法還原。");
+      }
+    };
+    reader.readAsText(file);
+  };
+
+  const canUndo = histVer >= 0 && undoStackRef.current.length > 0;
+  const canRedo = redoStackRef.current.length > 0;
+
+  const activeDaysWithRevenue = monthData.rows.filter(
+    (row) =>
+      row.day <= daysInMonth &&
+      currentChannels.reduce((rowSum, key) => rowSum + n(row[key]), 0) > 0
+  ).length;
+
   // 訂單數：未填寫時以「營收 ÷ 10,000」推估（以 placeholder 呈現，不冒充實際值），
   // 列表顯示與總計使用同一套邏輯
   const orderInfos = currentChannels.map((key) => {
@@ -2251,12 +2743,6 @@ export default function App() {
   const hasEstimatedOrders = orderInfos.some(
     (o) => !o.hasOverride && o.count > 0
   );
-
-  const activeDaysWithRevenue = monthData.rows.filter(
-    (row) =>
-      row.day <= daysInMonth &&
-      currentChannels.reduce((rowSum, key) => rowSum + n(row[key]), 0) > 0
-  ).length;
 
   const avgDailyOrdersAllChannels =
     activeDaysWithRevenue > 0
@@ -2296,6 +2782,7 @@ export default function App() {
           --blue-dim: rgba(56,189,248,0.12);
           --shadow-card: 0 1px 3px rgba(0,0,0,0.3), 0 1px 2px rgba(0,0,0,0.2);
           --table-border: rgba(255,255,255,0.05);
+          --row-today-bg: #1B2B47;
         }
 
         [data-theme="light"] {
@@ -2320,6 +2807,7 @@ export default function App() {
           --blue-dim: rgba(74,127,165,0.07);
           --shadow-card: 0 1px 0 rgba(28,28,30,0.06), 0 1px 3px rgba(28,28,30,0.03);
           --table-border: rgba(28,28,30,0.06);
+          --row-today-bg: #F0EEE6;
         }
 
         * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -2527,6 +3015,15 @@ export default function App() {
           color: #FFFFFF;
           border-color: var(--gold);
         }
+        .tab-dot {
+          display: inline-block;
+          width: 4px; height: 4px;
+          border-radius: 999px;
+          background: currentColor;
+          opacity: .5;
+          margin-left: 5px;
+          vertical-align: 2px;
+        }
 
         .right-stack { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
         .stat-soft {
@@ -2673,6 +3170,41 @@ export default function App() {
         .rank-right .v1 { font-family: 'DM Mono', monospace; font-weight: 800; color: var(--text-primary); font-size: 14px; }
         .rank-right .v2 { font-family: 'DM Mono', monospace; font-size: 11px; color: var(--text-dim); }
 
+        /* ── ROAS Strip ── */
+        .roas-strip {
+          display: grid;
+          grid-template-columns: repeat(4,minmax(0,1fr));
+          gap: 8px;
+          margin-bottom: 12px;
+        }
+        .roas-box {
+          border: 1px solid var(--border);
+          background: var(--bg-elevated);
+          border-radius: 12px;
+          padding: 10px 12px;
+          min-width: 0;
+        }
+        .roas-label {
+          font-family: 'DM Mono', monospace;
+          font-size: 9px; font-weight: 700;
+          color: var(--text-dim);
+          text-transform: uppercase; letter-spacing: .08em;
+        }
+        .roas-value {
+          margin-top: 5px;
+          font-family: 'DM Mono', monospace;
+          font-size: 20px; font-weight: 800;
+          color: var(--gold);
+          letter-spacing: -0.02em;
+          overflow-wrap: anywhere;
+        }
+        .roas-note {
+          margin-top: 3px;
+          font-size: 10px;
+          color: var(--text-dim);
+          font-family: 'DM Mono', monospace;
+        }
+
         /* ── Cost List ── */
         .cost-list { display: flex; flex-direction: column; gap: 10px; }
         .cost-item { background: var(--bg-elevated); border: 1px solid var(--border); border-radius: 14px; padding: 14px; }
@@ -2710,6 +3242,13 @@ export default function App() {
           font-size: 36px; font-weight: 800;
           color: var(--green); margin-top: 6px;
           letter-spacing: -0.03em;
+        }
+        .header-actions {
+          display: flex;
+          gap: 6px;
+          justify-content: flex-end;
+          flex-wrap: wrap;
+          margin-bottom: 8px;
         }
 
         .work-grid { display: grid; grid-template-columns: 310px minmax(0,1fr); gap: 20px; padding: 22px; }
@@ -2751,6 +3290,8 @@ export default function App() {
           cursor: pointer; transition: .16s ease; flex: 0 0 auto;
         }
         .btn-add:hover { background: var(--gold-glow); border-color: var(--gold-dim); }
+        .btn-add:disabled { opacity: .35; cursor: not-allowed; }
+        .btn-add:disabled:hover { background: var(--bg-surface); border-color: var(--border); }
 
         .orders-head { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-bottom: 14px; }
         .orders-table-head, .order-row {
@@ -3097,6 +3638,11 @@ export default function App() {
           color: #6B7F9E;
           border: 1px solid rgba(107,127,158,0.2);
         }
+        .anomaly-badge.today {
+          background: var(--gold-glow);
+          color: var(--gold);
+          border: 1px solid var(--border-bright);
+        }
         [data-theme="light"] .anomaly-badge.spike { background: rgba(138,106,46,0.08); color: #8A6A2E; border-color: rgba(138,106,46,0.2); }
         [data-theme="light"] .anomaly-badge.low { background: rgba(166,50,40,0.07); color: #A63228; border-color: rgba(166,50,40,0.18); }
         [data-theme="light"] .anomaly-badge.zero { background: rgba(28,28,30,0.05); color: #77777D; border-color: rgba(28,28,30,0.1); }
@@ -3107,12 +3653,21 @@ export default function App() {
         [data-theme="light"] tr.row-spike { background: rgba(251,191,36,0.05); }
         [data-theme="light"] tr.row-low { background: rgba(239,68,68,0.04); }
 
+        /* ── Today row ── */
+        tbody tr.row-today td { background: var(--gold-glow); }
+        tbody tr.row-today .sticky-left {
+          background: var(--row-today-bg);
+          color: var(--gold);
+        }
+        tbody tr.row-today:hover .sticky-left { background: var(--row-today-bg); }
+
         /* ── Responsive ── */
         @media (max-width: 1280px) {
           .grid-3, .grid-main, .grid-2, .work-grid, .trend-layout, .pie-layout, .exec-summary, .topbar, .big-header { grid-template-columns: 1fr; }
           .exec-side { grid-template-columns: 1fr 1fr; }
           .topbar-right { justify-content: flex-start; }
           .big-header-right { text-align: left; min-width: 0; }
+          .header-actions { justify-content: flex-start; }
         }
         @media (max-width: 980px) { .exec-side { grid-template-columns: 1fr; } }
         @media (max-width: 900px) {
@@ -3124,6 +3679,7 @@ export default function App() {
           .big-revenue { font-size: 28px; }
           .ad-grid { grid-template-columns: 1fr; }
           .grid-3 { grid-template-columns: 1fr; }
+          .roas-strip { grid-template-columns: repeat(2,minmax(0,1fr)); }
         }
 
         /* ── Theme Toggle ── */
@@ -3189,6 +3745,7 @@ export default function App() {
         [data-theme="light"] .stat-soft.accent-amber::before { background: #8A6A2E; }
         [data-theme="light"] .stat-soft.accent-blue::before { background: #4A7FA5; }
         [data-theme="light"] .stat-soft.accent-slate::before { background: #77777D; }
+        [data-theme="light"] .stat-soft.accent-green::before { background: #2D6A4F; }
         [data-theme="light"] .stat-soft.green { border-color: rgba(45,106,79,0.2); }
         [data-theme="light"] .sync-synced { border-color: rgba(45,106,79,0.25); }
         [data-theme="light"] .sync-syncing { border-color: rgba(74,127,165,0.25); }
@@ -3202,6 +3759,7 @@ export default function App() {
         [data-theme="light"] .rank-num { background: var(--bg-elevated); }
         [data-theme="light"] .small-chip { background: var(--bg-elevated); }
         [data-theme="light"] .progress { background: var(--bg-elevated); }
+        [data-theme="light"] tbody tr.row-today .sticky-left { background: var(--row-today-bg); }
 
         /* ── Recharts text ── */
         [data-theme="dark"] .recharts-text { fill: #6B7F9E !important; font-family: 'DM Mono', monospace !important; }
@@ -3355,7 +3913,7 @@ export default function App() {
               <SectionHeader
                 icon={TrendingUp}
                 title="營收趨勢總覽"
-                desc="YEARLY TREND · ACTUAL vs TARGET vs LAST YEAR"
+                desc="YEARLY TREND · 點擊長條可跳轉該月"
                 right={
                   <div
                     style={{ display: "flex", alignItems: "center", gap: 8 }}
@@ -3387,7 +3945,14 @@ export default function App() {
                 <div>
                   <div style={{ height: 380, marginTop: 4 }}>
                     <ResponsiveContainer width="100%" height="100%">
-                      <ComposedChart data={trendChartData} barCategoryGap={28}>
+                      <ComposedChart
+                        data={deferredTrendData}
+                        barCategoryGap={28}
+                        style={{ cursor: "pointer" }}
+                        onClick={(st) => {
+                          if (st && st.activeLabel) loadMonth(st.activeLabel);
+                        }}
+                      >
                         <CartesianGrid
                           vertical={false}
                           stroke={tc.border}
@@ -3450,6 +4015,34 @@ export default function App() {
                   </div>
                 </div>
                 <div className="right-stack">
+                  <div className="stat-soft accent-green green">
+                    <div className="stat-label">
+                      <Zap size={14} />
+                      達標配速
+                    </div>
+                    <div className="stat-value">
+                      {paceInfo.status === "current"
+                        ? paceInfo.needDaily <= 0
+                          ? "✓ 已達標"
+                          : money(paceInfo.needDaily)
+                        : paceInfo.status === "past"
+                        ? achieveRate >= 100
+                          ? "✓ 已達標"
+                          : "未達標"
+                        : "未開始"}
+                    </div>
+                    <div className="stat-note">
+                      {paceInfo.status === "current"
+                        ? paceInfo.needDaily <= 0
+                          ? `已超越月目標 · 剩 ${paceInfo.remaining} 天`
+                          : `剩 ${paceInfo.remaining} 天需日均 · 時間 ${paceInfo.timePct.toFixed(
+                              0
+                            )}% vs 達成 ${achieveRate.toFixed(0)}%`
+                        : paceInfo.status === "past"
+                        ? `當月達成 ${achieveRate.toFixed(1)}%`
+                        : `月目標 ${money(currentTarget)}`}
+                    </div>
+                  </div>
                   <div className="stat-soft accent-amber">
                     <div className="stat-label">
                       <Target size={14} />
@@ -3627,7 +4220,7 @@ export default function App() {
                   <ResponsiveContainer width="100%" height="100%">
                     <PieChart>
                       <Pie
-                        data={donutData}
+                        data={deferredDonutData}
                         dataKey="value"
                         nameKey="name"
                         innerRadius={62}
@@ -3636,7 +4229,7 @@ export default function App() {
                         stroke={tc.bgDeep}
                         strokeWidth={3}
                       >
-                        {donutData.map((entry) => (
+                        {deferredDonutData.map((entry) => (
                           <Cell key={entry.key} fill={entry.color} />
                         ))}
                       </Pie>
@@ -3685,7 +4278,7 @@ export default function App() {
               <SectionHeader
                 icon={Zap}
                 title="行銷成本"
-                desc="AD SPEND BY CHANNEL"
+                desc="AD SPEND · ROAS（網店=Google+FB/IG、蝦皮=蝦皮、POS不歸因）"
                 right={
                   <div
                     style={{
@@ -3695,12 +4288,43 @@ export default function App() {
                       color: "var(--gold)",
                     }}
                   >
-                    {money(
-                      adSpendEntries.reduce((sum, item) => sum + n(item[1]), 0)
-                    )}
+                    {money(roasStats.totalSpend)}
                   </div>
                 }
               />
+              <div className="roas-strip">
+                <div className="roas-box">
+                  <div className="roas-label">整體 MER</div>
+                  <div className="roas-value">{roasFmt(roasStats.mer)}</div>
+                  <div className="roas-note">總營收 ÷ 總廣告費</div>
+                </div>
+                <div className="roas-box">
+                  <div className="roas-label">網店 ROAS</div>
+                  <div className="roas-value">{roasFmt(roasStats.web)}</div>
+                  <div className="roas-note">網店 ÷ (Google+FB/IG)</div>
+                </div>
+                <div className="roas-box">
+                  <div className="roas-label">蝦皮 ROAS</div>
+                  <div className="roas-value">{roasFmt(roasStats.shopee)}</div>
+                  <div className="roas-note">蝦皮營收 ÷ 蝦皮廣告</div>
+                </div>
+                <div className="roas-box">
+                  <div className="roas-label">廣告佔營收</div>
+                  <div className="roas-value">
+                    {roasStats.adPct === null
+                      ? "—"
+                      : roasStats.adPct.toFixed(1) + "%"}
+                  </div>
+                  <div className="roas-note">POS 不計入廣告歸因</div>
+                </div>
+                {roasStats.momo !== null && (
+                  <div className="roas-box">
+                    <div className="roas-label">MOMO ROAS</div>
+                    <div className="roas-value">{roasFmt(roasStats.momo)}</div>
+                    <div className="roas-note">MOMO營收 ÷ MOMO廣告</div>
+                  </div>
+                )}
+              </div>
               <div className="cost-list">
                 {(() => {
                   const maxSpend = Math.max(
@@ -3722,6 +4346,15 @@ export default function App() {
                                 ? ((numeric / currentRevenue) * 100).toFixed(1)
                                 : "0.0"}
                               %
+                              {key === "shopee" && roasStats.shopee !== null
+                                ? ` · ROAS ${roasStats.shopee.toFixed(1)}x`
+                                : ""}
+                              {key === "google" || key === "fb"
+                                ? " · 歸因→網店"
+                                : ""}
+                              {key === "momo" && roasStats.momo !== null
+                                ? ` · ROAS ${roasStats.momo.toFixed(1)}x`
+                                : ""}
                             </div>
                           </div>
                           <div className="inline-actions">
@@ -3730,11 +4363,13 @@ export default function App() {
                               inputMode="numeric"
                               className="input"
                               style={{ width: 110, textAlign: "right" }}
-                              value={value}
+                              value={displayCell(value, `adc-${key}`)}
                               aria-label={`${labelOf(key)} 廣告費用`}
                               onChange={(e) =>
                                 setAdSpendValue(key, e.target.value)
                               }
+                              onFocus={(e) => handleCellFocus(e, `adc-${key}`)}
+                              onBlur={handleCellBlur}
                             />
                             <button
                               type="button"
@@ -3776,11 +4411,67 @@ export default function App() {
                   <h3>每日營收與支出管理</h3>
                 </div>
                 <div className="big-header-note">
-                  DAILY REVENUE WORKSTATION · Tab↹ 右移 · Enter↵ 下移 · Ctrl+Z
-                  復原
+                  DAILY REVENUE WORKSTATION · Tab↹ 右移 · Enter↵ 下移 ·
+                  Ctrl+Z/Y 復原重做 · 支援 Excel 多格貼上
                 </div>
               </div>
               <div className="big-header-right">
+                <div className="header-actions">
+                  <button
+                    type="button"
+                    className="btn-add"
+                    onClick={handleUndo}
+                    disabled={!canUndo}
+                    title="復原 (Ctrl+Z)"
+                  >
+                    <Undo2 size={13} />
+                    復原
+                  </button>
+                  <button
+                    type="button"
+                    className="btn-add"
+                    onClick={handleRedo}
+                    disabled={!canRedo}
+                    title="重做 (Ctrl+Shift+Z / Ctrl+Y)"
+                  >
+                    <Redo2 size={13} />
+                    重做
+                  </button>
+                  <button
+                    type="button"
+                    className="btn-add"
+                    onClick={exportCsv}
+                    title="匯出當月每日表格（Excel 可直接開啟）"
+                  >
+                    <Download size={13} />
+                    CSV
+                  </button>
+                  <button
+                    type="button"
+                    className="btn-add"
+                    onClick={exportJson}
+                    title="下載完整 JSON 備份（所有年度）"
+                  >
+                    <Download size={13} />
+                    備份
+                  </button>
+                  <button
+                    type="button"
+                    className="btn-add"
+                    onClick={() => fileInputRef.current?.click()}
+                    title="從 JSON 備份還原（將覆蓋現有資料）"
+                  >
+                    <Upload size={13} />
+                    還原
+                  </button>
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept=".json,application/json"
+                    style={{ display: "none" }}
+                    onChange={handleImportFile}
+                  />
+                </div>
                 <div
                   style={{
                     marginBottom: 6,
@@ -3819,12 +4510,7 @@ export default function App() {
                       廣告投放
                     </div>
                     <span className="small-chip">
-                      {money(
-                        adSpendEntries.reduce(
-                          (sum, item) => sum + n(item[1]),
-                          0
-                        )
-                      )}
+                      {money(roasStats.totalSpend)}
                     </span>
                   </div>
                   <div className="ad-grid">
@@ -3837,11 +4523,13 @@ export default function App() {
                             inputMode="numeric"
                             className="input"
                             style={{ flex: 1, textAlign: "right" }}
-                            value={value}
+                            value={displayCell(value, `ads-${key}`)}
                             aria-label={`${labelOf(key)} 廣告費用`}
                             onChange={(e) =>
                               setAdSpendValue(key, e.target.value)
                             }
+                            onFocus={(e) => handleCellFocus(e, `ads-${key}`)}
+                            onBlur={handleCellBlur}
                           />
                           <button
                             type="button"
@@ -4043,6 +4731,7 @@ export default function App() {
                         onClick={() => loadMonth(m)}
                       >
                         {m}
+                        {monthsWithData.has(m) && <span className="tab-dot" />}
                       </button>
                     ))}
                   </div>
@@ -4173,7 +4862,7 @@ export default function App() {
                       <span>({dayTypeStats.wdDays}天)</span>
                     </div>
                     <div className="range-chip">
-                      週末均 <strong>{money(dayTypeStats.avgWeekend)}</strong>
+                      假日均 <strong>{money(dayTypeStats.avgWeekend)}</strong>
                       <span>({dayTypeStats.weDays}天)</span>
                       {dayTypeStats.diffPct !== null && (
                         <span
@@ -4236,67 +4925,100 @@ export default function App() {
                               : flag === "zero"
                               ? "○ 無營收"
                               : null;
+                          const wd = dayWeekdayMap[row.day];
+                          const holiday = holidayMap[row.day];
+                          const isToday = row.day === todayDay;
+                          const rowCls = [
+                            flag ? `row-${flag}` : "",
+                            isToday ? "row-today" : "",
+                          ]
+                            .filter(Boolean)
+                            .join(" ");
                           return (
                             <tr
                               key={row.day}
-                              className={flag ? `row-${flag}` : ""}
+                              className={rowCls}
+                              data-today={isToday ? "true" : undefined}
                             >
                               <td className="sticky-left">
                                 {row.day}
                                 <span
                                   className={`weekday-badge${
-                                    dayWeekdayMap[row.day] === 0 ||
-                                    dayWeekdayMap[row.day] === 6
+                                    wd === 0 || wd === 6 || holiday
                                       ? " weekend"
                                       : ""
                                   }`}
+                                  title={holiday || undefined}
                                 >
-                                  {WEEKDAY_NAMES[dayWeekdayMap[row.day]]}
+                                  {WEEKDAY_NAMES[wd]}
+                                  {holiday ? "·假" : ""}
                                 </span>
+                                {isToday && (
+                                  <span className="anomaly-badge today">
+                                    今天
+                                  </span>
+                                )}
                                 {flagLabel && (
                                   <span className={`anomaly-badge ${flag}`}>
                                     {flagLabel}
                                   </span>
                                 )}
                               </td>
-                              {FIXED_CHANNELS.map((ch) => (
-                                <td key={ch.key}>
-                                  <input
-                                    type="text"
-                                    inputMode="numeric"
-                                    className="cell-input"
-                                    value={String(row[ch.key] ?? "")}
-                                    aria-label={`${row.day}日 ${ch.label} 營收`}
-                                    onChange={(e) =>
-                                      setRowValue(
+                              {FIXED_CHANNELS.map((ch) => {
+                                const cid = `c-${row.day}-${ch.key}`;
+                                return (
+                                  <td key={ch.key}>
+                                    <input
+                                      type="text"
+                                      inputMode="numeric"
+                                      className="cell-input"
+                                      value={displayCell(row[ch.key], cid)}
+                                      aria-label={`${row.day}日 ${ch.label} 營收`}
+                                      onChange={(e) =>
+                                        setRowValue(
+                                          row.day,
+                                          ch.key,
+                                          e.target.value
+                                        )
+                                      }
+                                      onFocus={(e) => handleCellFocus(e, cid)}
+                                      onBlur={handleCellBlur}
+                                      onKeyDown={handleCellKeyDown}
+                                      onPaste={handleCellPaste(
                                         row.day,
-                                        ch.key,
-                                        e.target.value
-                                      )
-                                    }
-                                    onFocus={handleCellFocus}
-                                    onKeyDown={handleCellKeyDown}
-                                  />
-                                </td>
-                              ))}
-                              {monthData.dynamicChannels.map((key) => (
-                                <td key={key}>
-                                  <input
-                                    type="text"
-                                    inputMode="numeric"
-                                    className="cell-input"
-                                    value={String(row[key] ?? "")}
-                                    aria-label={`${row.day}日 ${labelOf(
-                                      key
-                                    )} 營收`}
-                                    onChange={(e) =>
-                                      setRowValue(row.day, key, e.target.value)
-                                    }
-                                    onFocus={handleCellFocus}
-                                    onKeyDown={handleCellKeyDown}
-                                  />
-                                </td>
-                              ))}
+                                        ch.key
+                                      )}
+                                    />
+                                  </td>
+                                );
+                              })}
+                              {monthData.dynamicChannels.map((key) => {
+                                const cid = `c-${row.day}-${key}`;
+                                return (
+                                  <td key={key}>
+                                    <input
+                                      type="text"
+                                      inputMode="numeric"
+                                      className="cell-input"
+                                      value={displayCell(row[key], cid)}
+                                      aria-label={`${row.day}日 ${labelOf(
+                                        key
+                                      )} 營收`}
+                                      onChange={(e) =>
+                                        setRowValue(
+                                          row.day,
+                                          key,
+                                          e.target.value
+                                        )
+                                      }
+                                      onFocus={(e) => handleCellFocus(e, cid)}
+                                      onBlur={handleCellBlur}
+                                      onKeyDown={handleCellKeyDown}
+                                      onPaste={handleCellPaste(row.day, key)}
+                                    />
+                                  </td>
+                                );
+                              })}
                               <td
                                 className={`subtotal ${
                                   subtotal > 100000
@@ -4364,7 +5086,7 @@ export default function App() {
                   <Cloud size={13} color="var(--text-dim)" />
                   <span>
                     {cloudConnected
-                      ? "Firebase 即時同步模式 · 本機備份已啟用"
+                      ? "Firebase 即時同步（逐月增量寫入）· 本機備份已啟用"
                       : "尚未連上 Firebase · 本機資料模式"}
                   </span>
                   {syncState === "error" && (
@@ -4388,5 +5110,94 @@ export default function App() {
         </main>
       </div>
     </>
+  );
+}
+
+/* =========================
+   Error Boundary
+   任何 render 錯誤都不再整頁白屏：資料仍在雲端與 localStorage，
+   重新載入即可恢復
+========================= */
+class ErrorBoundary extends React.Component {
+  constructor(props) {
+    super(props);
+    this.state = { error: null };
+  }
+  static getDerivedStateFromError(error) {
+    return { error };
+  }
+  componentDidCatch(error, info) {
+    console.error("Dashboard crashed:", error, info);
+  }
+  render() {
+    if (!this.state.error) return this.props.children;
+    return (
+      <div
+        style={{
+          minHeight: "100vh",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          background: "#0D1520",
+          color: "#E8EFF8",
+          fontFamily: "system-ui, sans-serif",
+          padding: 24,
+        }}
+      >
+        <div style={{ maxWidth: 440, textAlign: "center" }}>
+          <div style={{ fontSize: 40, marginBottom: 12 }}>⚠️</div>
+          <h2 style={{ margin: "0 0 8px" }}>頁面發生錯誤</h2>
+          <p style={{ color: "#8FA3BE", fontSize: 14, lineHeight: 1.7 }}>
+            資料仍安全保存在雲端與本機備份，重新載入即可恢復。
+            若持續發生，請截圖主控台錯誤訊息回報。
+          </p>
+          <div
+            style={{
+              display: "flex",
+              gap: 10,
+              justifyContent: "center",
+              marginTop: 18,
+            }}
+          >
+            <button
+              onClick={() => window.location.reload()}
+              style={{
+                padding: "10px 18px",
+                borderRadius: 10,
+                border: "none",
+                background: "#3B82F6",
+                color: "#fff",
+                fontWeight: 700,
+                cursor: "pointer",
+              }}
+            >
+              重新載入
+            </button>
+            <button
+              onClick={() => this.setState({ error: null })}
+              style={{
+                padding: "10px 18px",
+                borderRadius: 10,
+                border: "1px solid rgba(255,255,255,.2)",
+                background: "transparent",
+                color: "#E8EFF8",
+                fontWeight: 700,
+                cursor: "pointer",
+              }}
+            >
+              嘗試繼續
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+}
+
+export default function App() {
+  return (
+    <ErrorBoundary>
+      <Dashboard />
+    </ErrorBoundary>
   );
 }
