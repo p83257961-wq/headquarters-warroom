@@ -1154,7 +1154,7 @@ const LABELS = {
   shopee: "蝦皮",
   momo: "MOMO",
   other: "其他",
-  fb: "FB/IG",
+  fb: "Meta",
   google: "Google",
 };
 
@@ -2297,7 +2297,7 @@ function Dashboard() {
   const gapToTarget = currentRevenue - currentTarget;
 
   // ROAS／MER — 歸因規則（老闆定案）：
-  //   網店 ROAS = 網店營收 ÷ (Google + FB/IG 廣告費)
+  //   網店 ROAS = 網店營收 ÷ (Google + Meta 廣告費)
   //   蝦皮 ROAS = 蝦皮營收 ÷ 蝦皮廣告費
   //   MOMO ROAS = MOMO營收 ÷ MOMO廣告費
   //   POS 與廣告無關，不做歸因；MER = 總營收 ÷ 總廣告費
@@ -4278,7 +4278,7 @@ function Dashboard() {
               <SectionHeader
                 icon={Zap}
                 title="行銷成本"
-                desc="AD SPEND · ROAS（網店=Google+FB/IG、蝦皮=蝦皮、POS不歸因）"
+                desc="AD SPEND · ROAS（網店=Google+Meta、蝦皮=蝦皮、POS不歸因）"
                 right={
                   <div
                     style={{
@@ -4301,7 +4301,7 @@ function Dashboard() {
                 <div className="roas-box">
                   <div className="roas-label">網店 ROAS</div>
                   <div className="roas-value">{roasFmt(roasStats.web)}</div>
-                  <div className="roas-note">網店 ÷ (Google+FB/IG)</div>
+                  <div className="roas-note">網店 ÷ (Google+Meta)</div>
                 </div>
                 <div className="roas-box">
                   <div className="roas-label">蝦皮 ROAS</div>
