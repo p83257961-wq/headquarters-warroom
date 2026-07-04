@@ -2483,15 +2483,10 @@ function Dashboard() {
   // YTD 同比：本年與去年都「只計已有實績的月份」，避免拿部分年度對整年比較
   const monthsWithActual = chartData.filter((i) => i.actual > 0);
   const ytd = monthsWithActual.reduce((s, i) => s + i.actual, 0);
-  const ytdLastYear = monthsWithActual.reduce(
-    (s, i) => s + (i.lastYear || 0),
-    0
-  );
-  const ytdYoY = ytdLastYear ? ((ytd - ytdLastYear) / ytdLastYear) * 100 : 0;
-  const annualTarget = chartData.reduce((s, i) => s + i.target, 0);
-  // 同期目標（僅已有實績月份的目標加總）→ 用來判斷 AHEAD / ON TRACK / BEHIND
-  // 進行中的月份依「時間進度」折算目標，過去月份計整月——
-  // 避免月初就被整月目標拖成 BEHIND 的假警報
+
+  // ── 進行中月份的同期口徑 ──
+  // 月初的部分月資料不能拿去對「去年整月」比較（7月才5天33萬 vs 去年整個7月
+  // 會把年增、預估、配速全部拖歪）。同比、預估、剩餘產能一律用「到今天為止」：
   const _today = new Date();
   const _isRunningMonth = (m) => {
     const { calendarYear, calendarMonth } = getCalendarYearMonth(
@@ -2503,35 +2498,91 @@ function Dashboard() {
       calendarMonth === _today.getMonth() + 1
     );
   };
+  const runningMonthTab = MONTH_TABS.find((m) => _isRunningMonth(m)) || null;
+  const runningDim = runningMonthTab
+    ? getDaysInMonth(activeYear, runningMonthTab)
+    : 0;
+  const runningHasActual =
+    !!runningMonthTab &&
+    monthsWithActual.some((i) => i.month === runningMonthTab);
+  const runningFrac = runningMonthTab
+    ? Math.min(_today.getDate() / runningDim, 1)
+    : 0;
+  const runningRemainDays = runningMonthTab
+    ? Math.max(runningDim - _today.getDate(), 0)
+    : 0;
+  const completedMonthsCount =
+    monthsWithActual.length - (runningHasActual ? 1 : 0);
+  // 已用月數（本月按進度折算）：月均、預估退路都用這個，不把 5 天當一個月
+  const effectiveMonthsUsed =
+    completedMonthsCount + (runningHasActual ? runningFrac : 0);
+
+  // 去年同期（精確口徑）：過去月份整月＋進行中月份取去年「同日區間 1~今天」；
+  // 去年該月沒有日資料時退回按天數比例折算
+  const lastYearSamePeriodOfRunning = () => {
+    if (!runningMonthTab) return 0;
+    const item = chartData.find((i) => i.month === runningMonthTab);
+    const full = item?.lastYear || 0;
+    const prevYearKey = String(Number(activeYear) - 1);
+    const prevState = allYears[prevYearKey]?.[runningMonthTab];
+    if (prevState && monthHasData(prevState)) {
+      const prevDim = getDaysInMonth(prevYearKey, runningMonthTab);
+      return sumMonthRange(prevState, 1, Math.min(_today.getDate(), prevDim));
+    }
+    return Math.round(full * runningFrac);
+  };
+  const ytdLastYear = monthsWithActual.reduce((s, i) => {
+    if (runningMonthTab && i.month === runningMonthTab)
+      return s + lastYearSamePeriodOfRunning();
+    return s + (i.lastYear || 0);
+  }, 0);
+  const ytdYoY = ytdLastYear ? ((ytd - ytdLastYear) / ytdLastYear) * 100 : 0;
+  const annualTarget = chartData.reduce((s, i) => s + i.target, 0);
+  // 同期目標（僅已有實績月份的目標加總）→ 用來判斷 AHEAD / ON TRACK / BEHIND
+  // 同期目標：過去月份計整月、進行中月份依時間進度折算——
+  // 避免月初就被整月目標拖成 BEHIND 的假警報
   const ytdTarget = monthsWithActual.reduce((s, i) => {
     if (!_isRunningMonth(i.month)) return s + (i.target || 0);
-    const dim = getDaysInMonth(activeYear, i.month);
-    return s + Math.round((i.target || 0) * (_today.getDate() / dim));
+    return s + Math.round((i.target || 0) * runningFrac);
   }, 0);
   const paceRate = ytdTarget ? (ytd / ytdTarget) * 100 : 0;
-  const monthsWithRevenue = monthsWithActual.length;
-  // 年度預估：優先以「去年同期佔全年比重」加權，反映 4-6 月旺季等季節性；
-  // 去年無資料時退回單純月平均 ×12
+  // 年度預估：優先以「去年同期（到今天）佔全年比重」加權，反映季節性
+  // 且不受月初部分資料污染；去年無資料時退回月均（本月按進度折算）×12
   const fullLastYear = chartData.reduce((s, i) => s + (i.lastYear || 0), 0);
   const projectedAnnual =
     ytdLastYear > 0 && fullLastYear > 0
       ? Math.round(ytd / (ytdLastYear / fullLastYear))
-      : monthsWithRevenue > 0
-      ? Math.round((ytd / monthsWithRevenue) * 12)
+      : effectiveMonthsUsed > 0
+      ? Math.round((ytd / effectiveMonthsUsed) * 12)
       : 0;
   const annualRate = annualTarget ? (ytd / annualTarget) * 100 : 0;
   const gapToTarget = currentRevenue - currentTarget;
 
-  // 年度配速：距年度目標還差多少、剩餘月份需要的月均（對照目前月均）。
+  // 年度配速：距年度目標還差多少、剩餘產能需要的月均（對照折算後月均）。
+  // 剩餘產能 = 完整未開始的月份＋本月剩餘天數，不把進行中的月份當已用完；
   // 月均比較未含季節性，達標與否的判斷以季節加權的 projectedAnnual 為準
   const gapToAnnual = annualTarget - ytd;
-  const remainingMonths = Math.max(12 - monthsWithRevenue, 0);
+  const fullRemainingMonths = runningMonthTab
+    ? Math.max(12 - completedMonthsCount - 1, 0)
+    : Math.max(12 - monthsWithActual.length, 0);
+  const remainingCapacity = runningMonthTab
+    ? fullRemainingMonths + runningRemainDays / (runningDim || 1)
+    : fullRemainingMonths;
+  const remainLabel =
+    runningMonthTab && runningRemainDays > 0
+      ? `${fullRemainingMonths} 個月＋本月 ${runningRemainDays} 天`
+      : `${fullRemainingMonths} 個月`;
   const needMonthly =
-    remainingMonths > 0
-      ? Math.max(0, Math.ceil(gapToAnnual / remainingMonths))
+    remainingCapacity > 0
+      ? Math.max(0, Math.ceil(gapToAnnual / remainingCapacity))
       : 0;
   const avgMonthly =
-    monthsWithRevenue > 0 ? Math.round(ytd / monthsWithRevenue) : 0;
+    effectiveMonthsUsed > 0 ? Math.round(ytd / effectiveMonthsUsed) : 0;
+  const monthsLabel = runningHasActual
+    ? completedMonthsCount > 0
+      ? `${completedMonthsCount} 個月＋本月 ${_today.getDate()} 天`
+      : `本月 ${_today.getDate()} 天`
+    : `${monthsWithActual.length} 個月`;
   const usedSeasonalProjection = ytdLastYear > 0 && fullLastYear > 0;
 
   // ROAS／MER — 歸因規則（老闆定案）：
@@ -2621,13 +2672,13 @@ function Dashboard() {
     ytd === 0
       ? `【FY${activeYear} 戰情摘要】尚未有營收資料。`
       : [
-          `【FY${activeYear} 戰情摘要】累計 ${money(ytd)}（${monthsWithRevenue} 個月），達年度目標 ${annualRate.toFixed(
+          `【FY${activeYear} 戰情摘要】累計 ${money(ytd)}（${monthsLabel}），達年度目標 ${annualRate.toFixed(
             1
           )}%，同期進度 ${paceRate.toFixed(0)}%（${
             paceRate >= 100 ? "超前" : paceRate >= 90 ? "貼線" : "落後"
           }）${
             ytdLastYear > 0
-              ? `，年增 ${ytdYoY >= 0 ? "+" : ""}${ytdYoY.toFixed(1)}%`
+              ? `，同期年增 ${ytdYoY >= 0 ? "+" : ""}${ytdYoY.toFixed(1)}%`
               : ""
           }。`,
           `全年預估 ${money(projectedAnnual)}${
@@ -2636,9 +2687,9 @@ function Dashboard() {
             projectedAnnual >= annualTarget
               ? `可望超標 ${money(projectedAnnual - annualTarget)}`
               : `距目標尚差 ${money(annualTarget - projectedAnnual)}`
-          }；剩 ${remainingMonths} 個月需月均 ${money(
+          }；剩 ${remainLabel}，需月均 ${money(
             needMonthly
-          )}（目前月均 ${money(avgMonthly)}）。`,
+          )}（月均進度折算 ${money(avgMonthly)}）。`,
           `${activeMonth}實績 ${money(currentRevenue)}${
             currentTarget > 0 ? `，達成 ${achieveRate.toFixed(1)}%` : ""
           }${
@@ -4617,11 +4668,11 @@ function Dashboard() {
                       年度配速
                     </div>
                     <div className="summary-value soft">
-                      {remainingMonths > 0 ? money(needMonthly) : "全年已齊"}
+                      {remainingCapacity > 0 ? money(needMonthly) : "全年已齊"}
                     </div>
                     <div className="summary-note">
-                      {remainingMonths > 0
-                        ? `剩 ${remainingMonths} 個月需月均 · 目前月均 ${money(
+                      {remainingCapacity > 0
+                        ? `剩 ${remainLabel}需月均 · 月均（進度折算）${money(
                             avgMonthly
                           )}`
                         : "12 個月實績已完整"}
