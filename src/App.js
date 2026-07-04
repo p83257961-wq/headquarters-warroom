@@ -3365,6 +3365,7 @@ function Dashboard() {
         .trend-card { display: flex; flex-direction: column; }
         .trend-card .trend-layout { flex: 1 1 auto; }
         .trend-layout { display: grid; grid-template-columns: minmax(0,1fr) 230px; gap: 16px; min-width: 0; }
+        .trend-chart-col { display: flex; flex-direction: column; min-width: 0; }
         .tab-btn {
           border: 1px solid var(--border); border-radius: 8px;
           padding: 8px 14px; font-family: 'DM Mono', monospace;
@@ -4359,8 +4360,17 @@ function Dashboard() {
                 }
               />
               <div className="trend-layout">
-                <div>
-                  <div style={{ height: 380, marginTop: 4 }}>
+                <div className="trend-chart-col">
+                  {/* 圖表吃可用高度但封頂 480：柱差更好讀、又不會稀疏；
+                      殘餘差額由右側統計卡 space-between 吸收，底部依然切齊 */}
+                  <div
+                    style={{
+                      flex: 1,
+                      minHeight: 380,
+                      maxHeight: 480,
+                      marginTop: 4,
+                    }}
+                  >
                     <ResponsiveContainer width="100%" height="100%">
                       <ComposedChart
                         data={deferredTrendData}
