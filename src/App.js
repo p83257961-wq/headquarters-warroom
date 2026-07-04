@@ -2580,8 +2580,8 @@ function Dashboard() {
     effectiveMonthsUsed > 0 ? Math.round(ytd / effectiveMonthsUsed) : 0;
   const monthsLabel = runningHasActual
     ? completedMonthsCount > 0
-      ? `${completedMonthsCount} 個月＋本月 ${_today.getDate()} 天`
-      : `本月 ${_today.getDate()} 天`
+      ? `${completedMonthsCount}個月+${_today.getDate()}天`
+      : `本月${_today.getDate()}天`
     : `${monthsWithActual.length} 個月`;
   const usedSeasonalProjection = ytdLastYear > 0 && fullLastYear > 0;
 
@@ -2678,20 +2678,18 @@ function Dashboard() {
             paceRate >= 100 ? "超前" : paceRate >= 90 ? "貼線" : "落後"
           }）${
             ytdLastYear > 0
-              ? `，同期年增 ${ytdYoY >= 0 ? "+" : ""}${ytdYoY.toFixed(1)}%`
+              ? `、年增 ${ytdYoY >= 0 ? "+" : ""}${ytdYoY.toFixed(1)}%`
               : ""
           }。`,
-          `全年預估 ${money(projectedAnnual)}${
-            usedSeasonalProjection ? "（依去年季節分佈加權）" : "（月均推算）"
-          }，${
+          `全年預估 ${money(projectedAnnual)}（${
+            usedSeasonalProjection ? "季節加權" : "月均推算"
+          }），${
             projectedAnnual >= annualTarget
               ? `可望超標 ${money(projectedAnnual - annualTarget)}`
-              : `距目標尚差 ${money(annualTarget - projectedAnnual)}`
-          }；剩 ${remainLabel}，需月均 ${money(
-            needMonthly
-          )}（月均進度折算 ${money(avgMonthly)}）。`,
+              : `距目標差 ${money(annualTarget - projectedAnnual)}`
+          }，剩餘需月均 ${money(needMonthly)}。`,
           `${activeMonth}實績 ${money(currentRevenue)}${
-            currentTarget > 0 ? `，達成 ${achieveRate.toFixed(1)}%` : ""
+            currentTarget > 0 ? `（達成 ${achieveRate.toFixed(1)}%）` : ""
           }${
             paceInfo.status === "current" && paceInfo.hasTarget
               ? paceInfo.needDaily > 0
@@ -3362,6 +3360,10 @@ function Dashboard() {
         }
 
         /* ── Trend Layout ── */
+        /* 左卡與右卡底部切齊：圖表固定 380 不長高，
+           右側統計卡欄以 space-between 分散、最後一張貼齊卡底 */
+        .trend-card { display: flex; flex-direction: column; }
+        .trend-card .trend-layout { flex: 1 1 auto; }
         .trend-layout { display: grid; grid-template-columns: minmax(0,1fr) 230px; gap: 16px; min-width: 0; }
         .tab-btn {
           border: 1px solid var(--border); border-radius: 8px;
@@ -3386,7 +3388,7 @@ function Dashboard() {
           vertical-align: 2px;
         }
 
-        .right-stack { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+        .right-stack { display: flex; flex-direction: column; gap: 12px; justify-content: space-between; min-width: 0; }
         .stat-soft {
           border-radius: 14px; padding: 14px;
           border: 1px solid var(--border);
@@ -3419,7 +3421,12 @@ function Dashboard() {
         .stat-note { margin-top: 5px; font-size: 11px; color: var(--text-dim); font-family: 'DM Mono', monospace; }
 
         /* ── Executive Summary ── */
-        .exec-summary { display: grid; grid-template-columns: 1fr; gap: 10px; min-width: 0; }
+        /* 右卡底部對齊：摘要卡彈性吸收多餘高度，讓目標成長/年度配速
+           貼齊卡片底部（與左欄最後一張統計卡切齊） */
+        .exec-card { display: flex; flex-direction: column; }
+        .exec-card .exec-summary { flex: 1 1 auto; }
+        .exec-summary { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+        .exec-summary .exec-brief { flex: 1 1 auto; }
         .exec-hero {
           border: 1px solid var(--border); border-radius: 16px;
           padding: 14px; background: var(--bg-elevated);
@@ -4319,7 +4326,7 @@ function Dashboard() {
 
           {/* ── TREND + SUMMARY ── */}
           <section className="grid-main">
-            <div className="card section-card">
+            <div className="card section-card trend-card">
               <SectionHeader
                 icon={TrendingUp}
                 title="營收趨勢總覽"
@@ -4521,7 +4528,7 @@ function Dashboard() {
               </div>
             </div>
 
-            <div className="card section-card">
+            <div className="card section-card exec-card">
               <SectionHeader
                 icon={Target}
                 title="目標與摘要"
