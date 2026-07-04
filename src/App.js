@@ -8,6 +8,7 @@ import React, {
 import {
   CalendarDays,
   ChevronDown,
+  Copy,
   DollarSign,
   Download,
   Eye,
@@ -1705,6 +1706,8 @@ function Dashboard() {
   const [lastSyncedAt, setLastSyncedAt] = useState("");
   // 儲存失敗後的自動重試訊號（5 秒後 +1 重新觸發儲存 effect）
   const [retryTick, setRetryTick] = useState(0);
+  // 戰情摘要「已複製」的短暫回饋
+  const [briefCopied, setBriefCopied] = useState(false);
   const [theme, setTheme] = useState(() => {
     try {
       return localStorage.getItem("hq_warroom_theme") || "light";
@@ -2519,6 +2522,18 @@ function Dashboard() {
   const annualRate = annualTarget ? (ytd / annualTarget) * 100 : 0;
   const gapToTarget = currentRevenue - currentTarget;
 
+  // 年度配速：距年度目標還差多少、剩餘月份需要的月均（對照目前月均）。
+  // 月均比較未含季節性，達標與否的判斷以季節加權的 projectedAnnual 為準
+  const gapToAnnual = annualTarget - ytd;
+  const remainingMonths = Math.max(12 - monthsWithRevenue, 0);
+  const needMonthly =
+    remainingMonths > 0
+      ? Math.max(0, Math.ceil(gapToAnnual / remainingMonths))
+      : 0;
+  const avgMonthly =
+    monthsWithRevenue > 0 ? Math.round(ytd / monthsWithRevenue) : 0;
+  const usedSeasonalProjection = ytdLastYear > 0 && fullLastYear > 0;
+
   // ROAS／MER — 歸因規則（老闆定案）：
   //   網店 ROAS = 網店營收 ÷ (Google + Meta 廣告費)
   //   蝦皮 ROAS = 蝦皮營收 ÷ 蝦皮廣告費
@@ -2599,6 +2614,54 @@ function Dashboard() {
       timePct: (d / daysInMonth) * 100,
     };
   }, [activeYear, activeMonth, daysInMonth, currentTarget, currentRevenue]);
+
+  // 自動生成的戰情摘要：年度進度 → 全年預估與配速 → 本月現況，
+  // 一鍵複製直接貼 LINE 回報，不用自己抄數字
+  const execBrief =
+    ytd === 0
+      ? `【FY${activeYear} 戰情摘要】尚未有營收資料。`
+      : [
+          `【FY${activeYear} 戰情摘要】累計 ${money(ytd)}（${monthsWithRevenue} 個月），達年度目標 ${annualRate.toFixed(
+            1
+          )}%，同期進度 ${paceRate.toFixed(0)}%（${
+            paceRate >= 100 ? "超前" : paceRate >= 90 ? "貼線" : "落後"
+          }）${
+            ytdLastYear > 0
+              ? `，年增 ${ytdYoY >= 0 ? "+" : ""}${ytdYoY.toFixed(1)}%`
+              : ""
+          }。`,
+          `全年預估 ${money(projectedAnnual)}${
+            usedSeasonalProjection ? "（依去年季節分佈加權）" : "（月均推算）"
+          }，${
+            projectedAnnual >= annualTarget
+              ? `可望超標 ${money(projectedAnnual - annualTarget)}`
+              : `距目標尚差 ${money(annualTarget - projectedAnnual)}`
+          }；剩 ${remainingMonths} 個月需月均 ${money(
+            needMonthly
+          )}（目前月均 ${money(avgMonthly)}）。`,
+          `${activeMonth}實績 ${money(currentRevenue)}${
+            currentTarget > 0 ? `，達成 ${achieveRate.toFixed(1)}%` : ""
+          }${
+            paceInfo.status === "current" && paceInfo.hasTarget
+              ? paceInfo.needDaily > 0
+                ? `，剩 ${paceInfo.remaining} 天需日均 ${money(
+                    paceInfo.needDaily
+                  )}`
+                : "，本月已達標"
+              : ""
+          }。`,
+        ].join("\n");
+
+  const copyBrief = async () => {
+    try {
+      await navigator.clipboard.writeText(execBrief);
+      setBriefCopied(true);
+      setTimeout(() => setBriefCopied(false), 2000);
+    } catch (err) {
+      console.error(err);
+      window.alert("複製失敗，請手動選取摘要文字複製。");
+    }
+  };
 
   // 搜尋改為「包含」比對：輸入 1 會列出 1、10~19、21、31
   const filteredRows = useMemo(() => {
@@ -3345,6 +3408,25 @@ function Dashboard() {
           letter-spacing: -0.01em; overflow-wrap: anywhere;
         }
         .exec-side { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; min-width: 0; }
+        .exec-brief {
+          border: 1px solid var(--border);
+          background: var(--bg-surface);
+          border-radius: 16px;
+          padding: 14px;
+          min-width: 0;
+        }
+        .exec-brief-head {
+          display: flex; justify-content: space-between;
+          align-items: center; gap: 10px; margin-bottom: 8px;
+        }
+        .exec-brief-head .btn-add { padding: 5px 10px; }
+        .exec-brief-text {
+          font-size: 12.5px;
+          line-height: 1.9;
+          color: var(--text-secondary);
+          white-space: pre-line;
+          overflow-wrap: anywhere;
+        }
         .summary-box {
           background: var(--bg-elevated);
           border: 1px solid var(--border);
@@ -4392,7 +4474,7 @@ function Dashboard() {
               <SectionHeader
                 icon={Target}
                 title="目標與摘要"
-                desc="ACHIEVEMENT · GROWTH · PROJECTION"
+                desc="ACHIEVEMENT · PACING · PROJECTION · 摘要可一鍵複製"
               />
               <div className="exec-summary">
                 <div className="exec-hero">
@@ -4434,14 +4516,64 @@ function Dashboard() {
                       <div className="exec-mini-label">年度累計</div>
                       <div className="exec-mini-value">{money(ytd)}</div>
                     </div>
+                    <div className="exec-mini-stat">
+                      <div className="exec-mini-label">距目標尚需</div>
+                      <div
+                        className="exec-mini-value"
+                        style={
+                          gapToAnnual <= 0 ? { color: "var(--green)" } : {}
+                        }
+                      >
+                        {gapToAnnual <= 0
+                          ? `已超標 ${money(-gapToAnnual)}`
+                          : money(gapToAnnual)}
+                      </div>
+                    </div>
+                    <div className="exec-mini-stat">
+                      <div className="exec-mini-label">預估全年</div>
+                      <div
+                        className="exec-mini-value"
+                        style={{
+                          color:
+                            projectedAnnual >= annualTarget && ytd > 0
+                              ? "var(--green)"
+                              : ytd > 0
+                              ? "var(--red)"
+                              : undefined,
+                        }}
+                      >
+                        {money(projectedAnnual)}
+                      </div>
+                    </div>
                   </div>
                   <div className="summary-note">
                     {ytd > 0
                       ? `同期目標達成 ${paceRate.toFixed(
                           1
-                        )}%（僅比較已有實績的月份）· 上方為對照全年總目標的進度`
+                        )}%（進行中月份按天數折算）· 預估全年${
+                          usedSeasonalProjection
+                            ? "依去年季節分佈加權"
+                            : "依月均推算"
+                        }`
                       : "全年進度對照年度總目標"}
                   </div>
+                </div>
+                <div className="exec-brief">
+                  <div className="exec-brief-head">
+                    <span className="summary-label">
+                      戰情摘要 · 貼 LINE 直接用
+                    </span>
+                    <button
+                      type="button"
+                      className="btn-add"
+                      onClick={copyBrief}
+                      title="複製三行摘要文字"
+                    >
+                      <Copy size={12} />
+                      {briefCopied ? "已複製 ✓" : "複製"}
+                    </button>
+                  </div>
+                  <div className="exec-brief-text">{execBrief}</div>
                 </div>
                 <div className="exec-side">
                   <div className="summary-box">
@@ -4481,22 +4613,28 @@ function Dashboard() {
                       className="summary-label"
                       style={{ display: "flex", alignItems: "center", gap: 5 }}
                     >
-                      <TrendingUp size={12} />
-                      預估年度營收
+                      <Zap size={12} />
+                      年度配速
                     </div>
                     <div className="summary-value soft">
-                      {money(projectedAnnual)}
+                      {remainingMonths > 0 ? money(needMonthly) : "全年已齊"}
                     </div>
                     <div className="summary-note">
-                      {monthsWithRevenue >= 12
-                        ? "全年資料已齊，等於實際累計"
-                        : `依 ${monthsWithRevenue} 個月平均推算 · 未含季節性`}
+                      {remainingMonths > 0
+                        ? `剩 ${remainingMonths} 個月需月均 · 目前月均 ${money(
+                            avgMonthly
+                          )}`
+                        : "12 個月實績已完整"}
                     </div>
-                    {annualTarget > 0 && (
+                    {annualTarget > 0 && ytd > 0 && (
                       <div className="summary-note" style={{ marginTop: 2 }}>
                         {projectedAnnual >= annualTarget
-                          ? "✓ 預估可達標"
-                          : "⚠ 預估未達年度目標"}
+                          ? `✓ 季節加權預估可達標（+${money(
+                              projectedAnnual - annualTarget
+                            )}）`
+                          : `⚠ 季節加權預估差 ${money(
+                              annualTarget - projectedAnnual
+                            )}`}
                       </div>
                     )}
                   </div>
