@@ -3419,17 +3419,17 @@ function Dashboard() {
         .stat-note { margin-top: 5px; font-size: 11px; color: var(--text-dim); font-family: 'DM Mono', monospace; }
 
         /* ── Executive Summary ── */
-        .exec-summary { display: grid; grid-template-columns: 1fr; gap: 12px; min-width: 0; }
+        .exec-summary { display: grid; grid-template-columns: 1fr; gap: 10px; min-width: 0; }
         .exec-hero {
           border: 1px solid var(--border); border-radius: 16px;
-          padding: 18px; background: var(--bg-elevated);
+          padding: 14px; background: var(--bg-elevated);
           min-width: 0;
         }
         .exec-hero-top { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
         .exec-hero-value {
-          margin-top: 10px;
+          margin-top: 6px;
           font-family: 'DM Mono', monospace;
-          font-size: 36px; line-height: .95; font-weight: 800;
+          font-size: 30px; line-height: .95; font-weight: 800;
           color: var(--gold-bright); letter-spacing: -0.03em; overflow-wrap: anywhere;
         }
         .exec-pill {
@@ -3442,10 +3442,10 @@ function Dashboard() {
         .exec-pill.good { background: var(--green-dim); border-color: rgba(16,185,129,0.3); color: var(--green); }
         .exec-pill.warn { background: rgba(251,191,36,0.12); border-color: rgba(251,191,36,0.3); color: #FBBF24; }
         .exec-pill.neutral { background: var(--bg-surface); border-color: var(--border); color: var(--text-dim); }
-        .exec-hero-grid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 10px; margin-top: 14px; margin-bottom: 10px; }
+        .exec-hero-grid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 8px; margin-top: 10px; }
         .exec-mini-stat {
           border: 1px solid var(--border); background: var(--bg-surface);
-          border-radius: 12px; padding: 10px 12px; min-width: 0;
+          border-radius: 12px; padding: 8px 10px; min-width: 0;
         }
         .exec-mini-label {
           font-family: 'DM Mono', monospace;
@@ -3453,9 +3453,9 @@ function Dashboard() {
           letter-spacing: .1em; text-transform: uppercase;
         }
         .exec-mini-value {
-          margin-top: 6px;
+          margin-top: 4px;
           font-family: 'DM Mono', monospace;
-          font-size: 16px; font-weight: 800; color: var(--text-primary);
+          font-size: 14px; font-weight: 800; color: var(--text-primary);
           letter-spacing: -0.01em; overflow-wrap: anywhere;
         }
         .exec-side { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; min-width: 0; }
@@ -3463,17 +3463,17 @@ function Dashboard() {
           border: 1px solid var(--border);
           background: var(--bg-surface);
           border-radius: 16px;
-          padding: 14px;
+          padding: 12px;
           min-width: 0;
         }
         .exec-brief-head {
           display: flex; justify-content: space-between;
-          align-items: center; gap: 10px; margin-bottom: 8px;
+          align-items: center; gap: 10px; margin-bottom: 6px;
         }
-        .exec-brief-head .btn-add { padding: 5px 10px; }
+        .exec-brief-head .btn-add { padding: 4px 10px; }
         .exec-brief-text {
-          font-size: 12.5px;
-          line-height: 1.9;
+          font-size: 12px;
+          line-height: 1.75;
           color: var(--text-secondary);
           white-space: pre-line;
           overflow-wrap: anywhere;
@@ -3481,7 +3481,7 @@ function Dashboard() {
         .summary-box {
           background: var(--bg-elevated);
           border: 1px solid var(--border);
-          border-radius: 16px; padding: 16px 14px; min-width: 0;
+          border-radius: 16px; padding: 12px; min-width: 0;
         }
         .summary-box.light { background: var(--bg-surface); }
         .summary-label {
@@ -3489,15 +3489,15 @@ function Dashboard() {
           font-size: 10px; font-weight: 700; color: var(--text-dim);
           letter-spacing: .12em; text-transform: uppercase;
         }
-        .summary-inline { display: flex; align-items: end; gap: 8px; margin-top: 12px; }
+        .summary-inline { display: flex; align-items: end; gap: 8px; margin-top: 8px; }
         .summary-value {
-          margin-top: 12px;
+          margin-top: 8px;
           font-family: 'DM Mono', monospace;
           font-size: 32px; line-height: .98; font-weight: 800;
           color: var(--text-primary); letter-spacing: -0.04em;
           overflow-wrap: anywhere;
         }
-        .summary-value.soft { color: var(--text-secondary); font-size: 22px; font-weight: 700; line-height: 1.02; word-break: break-word; }
+        .summary-value.soft { color: var(--text-secondary); font-size: 20px; font-weight: 700; line-height: 1.02; word-break: break-word; }
         .summary-note { margin-top: 6px; font-size: 11px; color: var(--text-dim); line-height: 1.5; }
 
         /* ── Input ── */
@@ -4596,17 +4596,6 @@ function Dashboard() {
                         {money(projectedAnnual)}
                       </div>
                     </div>
-                  </div>
-                  <div className="summary-note">
-                    {ytd > 0
-                      ? `同期目標達成 ${paceRate.toFixed(
-                          1
-                        )}%（進行中月份按天數折算）· 預估全年${
-                          usedSeasonalProjection
-                            ? "依去年季節分佈加權"
-                            : "依月均推算"
-                        }`
-                      : "全年進度對照年度總目標"}
                   </div>
                 </div>
                 <div className="exec-brief">
