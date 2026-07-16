@@ -184,7 +184,10 @@ const TW_HOLIDAYS = {
     "1-1": "元旦",
     "3-1": "228補假",
     "4-5": "清明補假",
+    "4-30": "勞動節補假",
+    "9-28": "教師節",
     "10-11": "國慶補假",
+    "10-25": "光復節",
     "12-25": "行憲紀念日",
   },
 };
@@ -1284,6 +1287,12 @@ function getHolidayName(calendarYear, calendarMonth, day) {
   return TW_HOLIDAYS[calendarYear]?.[`${calendarMonth}-${day}`] || null;
 }
 
+// 假日表是否未補齊（農曆假日需等官方行事曆逐年增補；
+// 完整年度至少 12+ 個放假日，低於 10 視為未補齊，UI 會提示分析僅供參考）
+function holidayTableIncomplete(calendarYear) {
+  return Object.keys(TW_HOLIDAYS[calendarYear] || {}).length < 10;
+}
+
 // 觸發瀏覽器下載（CSV / JSON 匯出用）
 function downloadFile(content, filename, type) {
   const blob = new Blob([content], { type });
@@ -1401,14 +1410,23 @@ function sanitizeMonthState(monthState) {
     safe.orderOverrides && typeof safe.orderOverrides === "object"
       ? safe.orderOverrides
       : {};
+  const adSpend =
+    safe.adSpend && typeof safe.adSpend === "object" ? safe.adSpend : {};
+  const adChannels = Array.isArray(safe.adChannels)
+    ? [...safe.adChannels]
+    : [...DEFAULT_AD_CHANNELS];
+  // 自動餵數會寫 adSpend.google/fb：渠道被刪但金額鍵仍在時併回清單，
+  // 避免「看不見卻天天回寫」的隱形花費漏出 MER/ROAS 計算
+  Object.keys(adSpend).forEach((k) => {
+    if (String(adSpend[k] ?? "").trim() !== "" && !adChannels.includes(k)) {
+      adChannels.push(k);
+    }
+  });
   return {
     rows,
     dynamicChannels,
-    adChannels: Array.isArray(safe.adChannels)
-      ? safe.adChannels
-      : [...DEFAULT_AD_CHANNELS],
-    adSpend:
-      safe.adSpend && typeof safe.adSpend === "object" ? safe.adSpend : {},
+    adChannels,
+    adSpend,
     // 訂單覆寫值一律正規化成數字字串，畸形值（物件/陣列）不會滲進輸入框變 [object Object]
     orderOverrides: Object.fromEntries(
       Object.entries(rawOverrides).map(([k, v]) => [
@@ -1514,7 +1532,7 @@ function pruneAllYears(all) {
 /* =========================
    Small Components
 ========================= */
-function SyncBadge({ syncState, lastSyncedAt }) {
+function SyncBadge({ syncState, lastSyncedAt, onRetry }) {
   const meta = {
     idle: { icon: Cloud, text: "雲端同步已啟用", cls: "sync-idle" },
     syncing: {
@@ -1539,6 +1557,45 @@ function SyncBadge({ syncState, lastSyncedAt }) {
       {lastSyncedAt ? (
         <span className="sync-time">· {lastSyncedAt}</span>
       ) : null}
+      {syncState === "error" && onRetry ? (
+        <button type="button" className="sync-retry" onClick={onRetry}>
+          重試
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
+// bot 餵數新鮮度徽章：讀文件 feedAt 欄位；>26 小時未更新＝排程掛了轉紅警示，
+// 讓老闆不會對著過期數字做決策（bot 靜默失敗的死活偵測）
+function FeedBadge({ feedAt }) {
+  if (!feedAt) {
+    return (
+      <div
+        className="sync-badge sync-idle"
+        role="status"
+        title="尚未收到自動餵數紀錄（首次執行排程後出現）"
+      >
+        <Cloud size={13} />
+        <span>自動餵數：無紀錄</span>
+      </div>
+    );
+  }
+  const hours = (Date.now() - new Date(feedAt).getTime()) / 3600000;
+  const stale = hours > 26;
+  return (
+    <div
+      className={`sync-badge ${stale ? "sync-error" : "sync-synced"}`}
+      role="status"
+      aria-live="polite"
+      title={`最後餵數：${new Date(feedAt).toLocaleString("zh-TW")}`}
+    >
+      {stale ? <AlertTriangle size={13} /> : <CheckCircle2 size={13} />}
+      <span>
+        {stale
+          ? `餵數中斷 ${Math.floor(hours)} 小時`
+          : `自動餵數 ${hours < 1.5 ? "1 小時內" : Math.floor(hours) + " 小時前"}`}
+      </span>
     </div>
   );
 }
@@ -1650,11 +1707,32 @@ function Dashboard() {
   const [bootDirtyMonths] = useState(() => {
     try {
       const raw = JSON.parse(localStorage.getItem(DIRTY_KEY) || "[]");
-      return Array.isArray(raw) ? raw.filter((k) => typeof k === "string") : [];
+      // 新格式帶時間戳：超過 48 小時的未上雲清單直接作廢——
+      // 這段期間 bot 的 14 天回刷已覆蓋自動欄位，陳年清單反而會把
+      // 回刷窗外的自動校正整月回滾（舊格式純陣列視為有效，一次性相容）
+      const months = Array.isArray(raw) ? raw : raw?.months;
+      const at = Array.isArray(raw) ? null : raw?.at;
+      if (at && Date.now() - new Date(at).getTime() > 48 * 3600000) return [];
+      return Array.isArray(months)
+        ? months.filter((k) => typeof k === "string")
+        : [];
     } catch {
       return [];
     }
   });
+
+  // 未上雲清單一律帶時間戳寫入（供上面的 48 小時判斷）
+  const persistDirtyMonths = () => {
+    try {
+      localStorage.setItem(
+        DIRTY_KEY,
+        JSON.stringify({
+          at: new Date().toISOString(),
+          months: Array.from(dirtyMonthsRef.current),
+        })
+      );
+    } catch {}
+  };
   const dirtyRef = useRef(bootDirtyMonths.length > 0); // 本機有尚未寫入雲端的變更
   const dirtyMonthsRef = useRef(new Set(bootDirtyMonths)); // 尚未寫入雲端的月份（"年::月"），供逐月增量同步
   const fullWriteRef = useRef(false); // 需要整份覆寫（匯入還原等大範圍變更）
@@ -1708,6 +1786,17 @@ function Dashboard() {
   const [retryTick, setRetryTick] = useState(0);
   // 戰情摘要「已複製」的短暫回饋
   const [briefCopied, setBriefCopied] = useState(false);
+  // bot 最後餵數時間（文件 feedAt 欄位）；freshTick 每 5 分鐘重算新鮮度顯示
+  const [feedAt, setFeedAt] = useState(null);
+  const [, setFreshTick] = useState(0);
+  // 手改自動欄位的一次性提醒（按過「知道了」後本次工作階段不再出現）
+  const [autoEditNoticeState, setAutoEditNoticeState] = useState(false);
+  const autoEditDismissedRef = useRef(false);
+  const autoEditNotice = autoEditNoticeState && !autoEditDismissedRef.current;
+  const setAutoEditNotice = (v) => {
+    if (v === false) autoEditDismissedRef.current = true;
+    setAutoEditNoticeState(v);
+  };
   const [theme, setTheme] = useState(() => {
     try {
       return localStorage.getItem("hq_warroom_theme") || "light";
@@ -1743,14 +1832,17 @@ function Dashboard() {
           STORAGE_KEY,
           JSON.stringify(pruneAllYears(allYearsRef.current || {}))
         );
-        localStorage.setItem(
-          DIRTY_KEY,
-          JSON.stringify(Array.from(dirtyMonthsRef.current))
-        );
+        persistDirtyMonths();
       } catch {}
     };
     window.addEventListener("beforeunload", flush);
     return () => window.removeEventListener("beforeunload", flush);
+  }, []);
+
+  // 每 5 分鐘重算一次餵數新鮮度顯示（>26h 會轉紅警示）
+  useEffect(() => {
+    const t = setInterval(() => setFreshTick((v) => v + 1), 5 * 60 * 1000);
+    return () => clearInterval(t);
   }, []);
 
   const monthData = allYears[activeYear][activeMonth];
@@ -1845,7 +1937,39 @@ function Dashboard() {
       const safeYear = prev[entry.year] || buildYearState(entry.year);
       const restored = { ...safeYear };
       Object.keys(entry.months).forEach((m) => {
-        restored[m] = sanitizeMonthState(entry.months[m]);
+        const snap = sanitizeMonthState(entry.months[m]);
+        const cur = safeYear[m];
+        // bot 代管欄位（web/pos 日格、Google/Meta 廣告費、web/pos 單數）
+        // 不隨復原回滾——這些欄位的真相在 API，快照可能早於 bot 校正，
+        // 復原只作用於手 key 欄位（蝦皮/momo/其他/成長率以外的月內資料）
+        restored[m] = cur
+          ? {
+              ...snap,
+              rows: snap.rows.map((r, i) => ({
+                ...r,
+                web: cur.rows?.[i]?.web ?? r.web,
+                pos: cur.rows?.[i]?.pos ?? r.pos,
+              })),
+              adSpend: {
+                ...snap.adSpend,
+                ...(cur.adSpend?.google !== undefined
+                  ? { google: cur.adSpend.google }
+                  : {}),
+                ...(cur.adSpend?.fb !== undefined
+                  ? { fb: cur.adSpend.fb }
+                  : {}),
+              },
+              orderOverrides: {
+                ...snap.orderOverrides,
+                ...(cur.orderOverrides?.web !== undefined
+                  ? { web: cur.orderOverrides.web }
+                  : {}),
+                ...(cur.orderOverrides?.pos !== undefined
+                  ? { pos: cur.orderOverrides.pos }
+                  : {}),
+              },
+            }
+          : snap;
       });
       return { ...prev, [entry.year]: restored };
     });
@@ -1924,6 +2048,7 @@ function Dashboard() {
   }, []);
 
   const setRowValue = (day, key, value) => {
+    if (key === "web" || key === "pos") setAutoEditNotice(true);
     updateActiveMonth(
       (prev) => ({
         ...prev,
@@ -2003,6 +2128,7 @@ function Dashboard() {
   };
 
   const setAdSpendValue = (key, value) => {
+    if (key === "google" || key === "fb") setAutoEditNotice(true);
     updateActiveMonth(
       (prev) => ({
         ...prev,
@@ -2034,6 +2160,13 @@ function Dashboard() {
   };
 
   const removeAdChannel = (key) => {
+    if (key === "google" || key === "fb") {
+      window.alert(
+        "Google／Meta 廣告費由自動餵數維護，無法刪除——金額每日 07:31 自動更新，" +
+          "刪除後仍會被寫回，反而變成看不見的隱形花費。"
+      );
+      return;
+    }
     if (
       !window.confirm(
         `確定要刪除廣告渠道「${labelOf(
@@ -2054,6 +2187,7 @@ function Dashboard() {
   };
 
   const setOrderOverride = (key, value) => {
+    if (key === "web" || key === "pos") setAutoEditNotice(true);
     updateActiveMonth(
       (prev) => ({
         ...prev,
@@ -2109,26 +2243,67 @@ function Dashboard() {
           }
           docExistsRef.current = true;
           const remote = snap.data() || {};
+          // bot 新鮮度：無論後續是否套用資料，都先更新餵數時間
+          if (remote.feedAt) setFeedAt(remote.feedAt);
           const isOwnEcho = remote.updatedBy === clientIdRef.current;
           if (hydratedRef.current && isOwnEcho) {
             setSyncState("synced");
             setLastSyncedAt(new Date().toLocaleString("zh-TW"));
+            // 回音文件可能含「編輯期間被略過」的 bot/他機資料——
+            // 乾淨狀態下照樣套用，避免整天顯示舊數＋綠色已同步
+            if (!dirtyRef.current) {
+              skipNextSaveRef.current = true;
+              setAllYears(sanitizeAllYears(remote.allYears));
+            }
             return;
           }
           if (hydratedRef.current && dirtyRef.current) return;
           const remoteYears = sanitizeAllYears(remote.allYears);
-          // 首次載入時，若本機還有「上次未成功上雲」的月份，以本機版本覆蓋
-          // 遠端對應月份（其餘月份吃遠端最新），隨後的儲存流程會把它們補寫上雲
+          // 首次載入時，若本機還有「上次未成功上雲」的月份：以本機月份為底
+          // 保住手 key，但 bot 代管欄位（web/pos 日格、廣告費、單數）一律吃遠端
+          // 最新——避免舊分頁把 14 天回刷窗以外的自動校正整月回滾
           if (!hydratedRef.current && dirtyMonthsRef.current.size) {
             const localYears = allYearsRef.current;
             dirtyMonthsRef.current.forEach((key) => {
               const [y, m] = key.split("::");
               const localMonth = localYears?.[y]?.[m];
-              if (localMonth) {
-                remoteYears[y] = { ...(remoteYears[y] || {}), [m]: localMonth };
-              }
+              const remoteMonth = remoteYears?.[y]?.[m];
+              if (!localMonth) return;
+              const merged = remoteMonth
+                ? {
+                    ...localMonth,
+                    rows: (localMonth.rows || []).map((r, i) => ({
+                      ...r,
+                      web: remoteMonth.rows?.[i]?.web ?? r.web,
+                      pos: remoteMonth.rows?.[i]?.pos ?? r.pos,
+                    })),
+                    adSpend: {
+                      ...(localMonth.adSpend || {}),
+                      ...(remoteMonth.adSpend?.google !== undefined
+                        ? { google: remoteMonth.adSpend.google }
+                        : {}),
+                      ...(remoteMonth.adSpend?.fb !== undefined
+                        ? { fb: remoteMonth.adSpend.fb }
+                        : {}),
+                    },
+                    orderOverrides: {
+                      ...(localMonth.orderOverrides || {}),
+                      ...(remoteMonth.orderOverrides?.web !== undefined
+                        ? { web: remoteMonth.orderOverrides.web }
+                        : {}),
+                      ...(remoteMonth.orderOverrides?.pos !== undefined
+                        ? { pos: remoteMonth.orderOverrides.pos }
+                        : {}),
+                    },
+                  }
+                : localMonth;
+              remoteYears[y] = { ...(remoteYears[y] || {}), [m]: merged };
             });
           }
+          // 遠端資料（bot/他機）即將套用：舊復原快照與現實脫鉤，全部作廢
+          undoStackRef.current = [];
+          redoStackRef.current = [];
+          setHistVer((v) => v + 1);
           const remoteTargetGrowthRate =
             typeof remote.targetGrowthRate === "string"
               ? remote.targetGrowthRate
@@ -2165,10 +2340,7 @@ function Dashboard() {
           STORAGE_KEY,
           JSON.stringify(pruneAllYears(allYears))
         );
-        localStorage.setItem(
-          DIRTY_KEY,
-          JSON.stringify(Array.from(dirtyMonthsRef.current))
-        );
+        persistDirtyMonths();
       } catch (err) {
         console.error(err);
       }
@@ -2207,6 +2379,9 @@ function Dashboard() {
             updatedAt: serverTimestamp(),
             updatedAtClient: new Date().toISOString(),
             updatedBy: clientIdRef.current,
+            // 整份覆寫會刪掉不在 payload 的欄位：保留 bot 的餵數心跳，
+            // 否則匯入還原後新鮮度徽章會誤報「無紀錄」直到次日 07:31
+            ...(feedAt ? { feedAt } : {}),
           });
           fullWriteRef.current = false;
           docExistsRef.current = true;
@@ -2233,12 +2408,7 @@ function Dashboard() {
           args.push(new FieldPath("updatedBy"), clientIdRef.current);
           await updateDoc(ref, ...args);
         }
-        try {
-          localStorage.setItem(
-            DIRTY_KEY,
-            JSON.stringify(Array.from(dirtyMonthsRef.current))
-          );
-        } catch {}
+        persistDirtyMonths();
         setSyncState("synced");
         setLastSyncedAt(new Date().toLocaleString("zh-TW"));
       } catch (err) {
@@ -2473,9 +2643,6 @@ function Dashboard() {
     target: 0,
   };
   const currentTarget = currentChart.target || 0;
-  const yoy = currentChart.lastYear
-    ? ((currentRevenue - currentChart.lastYear) / currentChart.lastYear) * 100
-    : 0;
   const achieveRate = currentTarget
     ? (currentRevenue / currentTarget) * 100
     : 0;
@@ -2505,11 +2672,16 @@ function Dashboard() {
   const runningHasActual =
     !!runningMonthTab &&
     monthsWithActual.some((i) => i.month === runningMonthTab);
+  // 資料口徑到「昨天」：bot 每日 07:31 寫昨日、蝦皮手 key 也是隔日補——
+  // 已過天數＝今天-1、「今天」歸剩餘側，與達標配速卡（remaining 含今天）口徑一致
+  const runningElapsed = runningMonthTab
+    ? Math.max(_today.getDate() - 1, 0)
+    : 0;
   const runningFrac = runningMonthTab
-    ? Math.min(_today.getDate() / runningDim, 1)
+    ? Math.min(runningElapsed / runningDim, 1)
     : 0;
   const runningRemainDays = runningMonthTab
-    ? Math.max(runningDim - _today.getDate(), 0)
+    ? Math.max(runningDim - runningElapsed, 0)
     : 0;
   const completedMonthsCount =
     monthsWithActual.length - (runningHasActual ? 1 : 0);
@@ -2517,17 +2689,17 @@ function Dashboard() {
   const effectiveMonthsUsed =
     completedMonthsCount + (runningHasActual ? runningFrac : 0);
 
-  // 去年同期（精確口徑）：過去月份整月＋進行中月份取去年「同日區間 1~今天」；
+  // 去年同期（精確口徑）：過去月份整月＋進行中月份取去年「同日區間 1~昨日」；
   // 去年該月沒有日資料時退回按天數比例折算
   const lastYearSamePeriodOfRunning = () => {
-    if (!runningMonthTab) return 0;
+    if (!runningMonthTab || runningElapsed === 0) return 0;
     const item = chartData.find((i) => i.month === runningMonthTab);
     const full = item?.lastYear || 0;
     const prevYearKey = String(Number(activeYear) - 1);
     const prevState = allYears[prevYearKey]?.[runningMonthTab];
     if (prevState && monthHasData(prevState)) {
       const prevDim = getDaysInMonth(prevYearKey, runningMonthTab);
-      return sumMonthRange(prevState, 1, Math.min(_today.getDate(), prevDim));
+      return sumMonthRange(prevState, 1, Math.min(runningElapsed, prevDim));
     }
     return Math.round(full * runningFrac);
   };
@@ -2537,6 +2709,15 @@ function Dashboard() {
     return s + (i.lastYear || 0);
   }, 0);
   const ytdYoY = ytdLastYear ? ((ytd - ytdLastYear) / ytdLastYear) * 100 : 0;
+
+  // 當月 YoY：進行中月份比「去年同日區間（至昨日）」——與年度同期口徑一致，
+  // 不再拿部分月比去年整月（那會讓每月前三週天天亮假紅字）；其他月份維持整月對整月
+  const monthYoyBase = _isRunningMonth(activeMonth)
+    ? lastYearSamePeriodOfRunning()
+    : currentChart.lastYear;
+  const yoy = monthYoyBase
+    ? ((currentRevenue - monthYoyBase) / monthYoyBase) * 100
+    : 0;
   const annualTarget = chartData.reduce((s, i) => s + i.target, 0);
   // 同期目標（僅已有實績月份的目標加總）→ 用來判斷 AHEAD / ON TRACK / BEHIND
   // 同期目標：過去月份計整月、進行中月份依時間進度折算——
@@ -2578,10 +2759,11 @@ function Dashboard() {
       : 0;
   const avgMonthly =
     effectiveMonthsUsed > 0 ? Math.round(ytd / effectiveMonthsUsed) : 0;
+  const monthsLabelDays = Math.max(runningElapsed, runningHasActual ? 1 : 0);
   const monthsLabel = runningHasActual
     ? completedMonthsCount > 0
-      ? `${completedMonthsCount}個月+${_today.getDate()}天`
-      : `本月${_today.getDate()}天`
+      ? `${completedMonthsCount}個月+${monthsLabelDays}天`
+      : `本月${monthsLabelDays}天`
     : `${monthsWithActual.length} 個月`;
   const usedSeasonalProjection = ytdLastYear > 0 && fullLastYear > 0;
 
@@ -2687,7 +2869,11 @@ function Dashboard() {
             projectedAnnual >= annualTarget
               ? `可望超標 ${money(projectedAnnual - annualTarget)}`
               : `距目標差 ${money(annualTarget - projectedAnnual)}`
-          }，剩餘需月均 ${money(needMonthly)}。`,
+          }${
+            remainingCapacity > 0
+              ? `，剩餘需月均 ${money(needMonthly)}`
+              : "，全年實績已完整"
+          }。`,
           `${activeMonth}實績 ${money(currentRevenue)}${
             currentTarget > 0 ? `（達成 ${achieveRate.toFixed(1)}%）` : ""
           }${
@@ -2702,6 +2888,29 @@ function Dashboard() {
         ].join("\n");
 
   const copyBrief = async () => {
+    // 防線：昨日蝦皮未填或餵數逾時，先確認再複製——避免低報數字直接進 LINE。
+    // 用真正的昨日日期定位（每月 1 日會正確查上個月最後一天），且只要檢視的是
+    // 進行中年度就檢查（YTD 含昨日，不限當前月分頁）
+    const warns = [];
+    if (runningMonthTab) {
+      const yd = new Date(_today.getFullYear(), _today.getMonth(), _today.getDate() - 1);
+      const yFy =
+        yd.getMonth() + 1 >= 4
+          ? String(yd.getFullYear())
+          : String(yd.getFullYear() - 1);
+      const yRow = allYears[yFy]?.[`${yd.getMonth() + 1}月`]?.rows?.find(
+        (r) => r.day === yd.getDate()
+      );
+      if (!String(yRow?.shopee ?? "").trim())
+        warns.push(`昨日（${yd.getMonth() + 1}/${yd.getDate()}）蝦皮尚未輸入`);
+    }
+    if (feedAt && Date.now() - new Date(feedAt).getTime() > 26 * 3600000)
+      warns.push("自動餵數已超過 26 小時未更新");
+    if (
+      warns.length &&
+      !window.confirm(`⚠ ${warns.join("；")}——摘要可能低報，仍要複製？`)
+    )
+      return;
     try {
       await navigator.clipboard.writeText(execBrief);
       setBriefCopied(true);
@@ -2942,6 +3151,11 @@ function Dashboard() {
     if (!lines.length) return;
     const startCol = currentChannels.indexOf(startKey);
     if (startCol === -1) return;
+    // 多格貼上若覆蓋到自動欄位（web/pos），同樣要出提醒（單格輸入已有）
+    const maxCols = Math.max(...lines.map((l) => l.split("\t").length));
+    const touched = currentChannels.slice(startCol, startCol + maxCols);
+    if (touched.includes("web") || touched.includes("pos"))
+      setAutoEditNotice(true);
     updateActiveMonth((prev) => ({
       ...prev,
       rows: prev.rows.map((r) => {
@@ -3047,7 +3261,8 @@ function Dashboard() {
               parsed.exportedAt
                 ? new Date(parsed.exportedAt).toLocaleString("zh-TW")
                 : "未知"
-            }`
+            }\n\n注意：自動餵數只回補近 14 天——備份較舊時，` +
+              `更早期間的網店/POS/廣告費將以備份內容為準，不會自動修復。`
           )
         )
           return;
@@ -3075,6 +3290,34 @@ function Dashboard() {
 
   const canUndo = histVer >= 0 && undoStackRef.current.length > 0;
   const canRedo = redoStackRef.current.length > 0;
+
+  const retrySync = () => {
+    setSyncState("idle");
+    setAuthReady(false);
+    setTimeout(() => setAuthReady(true), 100);
+  };
+
+  // 跳到「昨日」的蝦皮輸入格（每天唯一要手 key 的動作，不用捲整版）。
+  // 用真正的昨日日期推月份與年度：每月 1 日會正確跳到上個月最後一天
+  //（4/1 連會計年度都會正確切到前一年度的 3 月）
+  const jumpToYesterdayShopee = () => {
+    const t = new Date();
+    const y = new Date(t.getFullYear(), t.getMonth(), t.getDate() - 1);
+    const fy =
+      y.getMonth() + 1 >= 4 ? String(y.getFullYear()) : String(y.getFullYear() - 1);
+    setActiveYear(fy);
+    setActiveMonth(`${y.getMonth() + 1}月`);
+    const day = y.getDate();
+    setTimeout(() => {
+      const el = tableRef.current?.querySelector(
+        `tbody .cell-input[data-day="${day}"][data-ch="shopee"]`
+      );
+      if (el) {
+        el.scrollIntoView({ block: "center" });
+        el.focus();
+      }
+    }, 250);
+  };
 
   const activeDaysWithRevenue = monthData.rows.filter(
     (row) => row.day <= daysInMonth && rowTotal(row, currentChannels) > 0
@@ -3351,6 +3594,42 @@ function Dashboard() {
         .section-title-row h3 { margin: 0; font-size: 15px; font-weight: 800; color: var(--text-primary); }
         .section-header p { margin: 5px 0 0; font-size: 12px; color: var(--text-dim); font-family: 'DM Mono', monospace; }
 
+        /* 自動/手動欄位標示與提醒 */
+        .auto-chip {
+          display: inline-block;
+          font-family: 'DM Mono', monospace;
+          font-size: 10px; font-weight: 700;
+          letter-spacing: .05em;
+          color: var(--text-dim);
+          border: 1px solid var(--border-bright);
+          border-radius: 5px;
+          padding: 0px 5px;
+          margin-left: 6px;
+          vertical-align: 2px;
+        }
+        .auto-chip.manual { color: var(--gold); border-color: var(--gold-dim); }
+        .auto-warn {
+          display: flex; align-items: center; gap: 10px;
+          border: 1px solid rgba(251,191,36,0.35);
+          background: rgba(251,191,36,0.08);
+          border-radius: 10px;
+          padding: 8px 12px;
+          margin-bottom: 10px;
+          font-size: 12px; color: var(--text-secondary);
+          line-height: 1.6;
+        }
+        .auto-warn button {
+          margin-left: auto; border: 1px solid var(--border);
+          background: var(--bg-surface); border-radius: 6px;
+          padding: 4px 10px; cursor: pointer; color: var(--text-primary);
+          font-size: 11px; flex: 0 0 auto; white-space: nowrap;
+        }
+        .sync-retry {
+          border: none; background: none; cursor: pointer;
+          color: inherit; font: inherit; font-size: 11px;
+          text-decoration: underline; padding: 0 2px;
+        }
+
         .chip {
           display: inline-flex; align-items: center; gap: 7px;
           border-radius: 8px; border: 1px solid var(--border);
@@ -3381,10 +3660,10 @@ function Dashboard() {
         }
         .tab-dot {
           display: inline-block;
-          width: 4px; height: 4px;
+          width: 5px; height: 5px;
           border-radius: 999px;
           background: currentColor;
-          opacity: .5;
+          opacity: .85; /* 深色主題下 .5 幾乎不可見 */
           margin-left: 5px;
           vertical-align: 2px;
         }
@@ -3661,6 +3940,11 @@ function Dashboard() {
           justify-content: flex-end;
           flex-wrap: wrap;
           margin-bottom: 8px;
+        }
+        .header-sync-row {
+          margin-bottom: 6px;
+          display: flex;
+          justify-content: flex-end;
         }
 
         .work-grid { display: grid; grid-template-columns: 310px minmax(0,1fr); gap: 20px; padding: 22px; }
@@ -4081,6 +4365,7 @@ function Dashboard() {
           .topbar-right { justify-content: flex-start; }
           .big-header-right { text-align: left; min-width: 0; }
           .header-actions { justify-content: flex-start; }
+          .header-sync-row { justify-content: flex-start; }
         }
         @media (max-width: 980px) { .exec-side { grid-template-columns: 1fr; } }
         @media (max-width: 900px) {
@@ -4093,10 +4378,13 @@ function Dashboard() {
           .ad-grid { grid-template-columns: 1fr; }
           .grid-3 { grid-template-columns: 1fr; }
           .roas-strip { grid-template-columns: repeat(2,minmax(0,1fr)); }
-          /* 手機加大可點面積（接近 44px 觸控標準） */
+          /* 手機加大可點面積（接近 44px 觸控標準）——
+             複合選擇器版本補齊 specificity，避免被桌機規則蓋掉 */
           .icon-btn { padding: 11px; }
           .tab-btn { padding: 11px 14px; }
+          .range-bar .tab-btn { padding: 11px 14px; font-size: 12px; }
           .btn-add { padding: 11px 12px; }
+          .exec-brief-head .btn-add { padding: 11px 12px; }
           .cell-input { height: 42px; }
         }
 
@@ -4178,6 +4466,8 @@ function Dashboard() {
         [data-theme="light"] .small-chip { background: var(--bg-elevated); }
         [data-theme="light"] .progress { background: var(--bg-elevated); }
         [data-theme="light"] tbody tr.row-today .sticky-left { background: var(--row-today-bg); }
+        /* 角落表頭底色需與表頭列一致（淺色 .sticky-left 覆寫會造成白色接縫） */
+        [data-theme="light"] thead th.sticky-left { background: var(--bg-elevated); }
 
         /* ── Recharts text ── */
         [data-theme="dark"] .recharts-text { fill: #8296B3 !important; font-family: 'DM Mono', monospace !important; }
@@ -4241,7 +4531,12 @@ function Dashboard() {
                   {theme === "dark" ? "Dark" : "Light"}
                 </span>
               </button>
-              <SyncBadge syncState={syncState} lastSyncedAt={lastSyncedAt} />
+              <FeedBadge feedAt={feedAt} />
+              <SyncBadge
+                syncState={syncState}
+                lastSyncedAt={lastSyncedAt}
+                onRetry={retrySync}
+              />
               <div className="selector-box">
                 <div className="selector-label">Fiscal Year</div>
                 <div className="selector-row">
@@ -4713,7 +5008,7 @@ function Dashboard() {
                   {deferredDonutData.length === 0 ? (
                     <div className="pie-empty">
                       本月尚無營收資料
-                      <span>輸入第一筆後即時顯示通路結構</span>
+                      <span>網店/POS 由自動餵數每日補入昨日；蝦皮需手動輸入</span>
                     </div>
                   ) : (
                   <ResponsiveContainer width="100%" height="100%">
@@ -4745,8 +5040,8 @@ function Dashboard() {
                 <div className="rank-list">
                   {donutData.length === 0 && (
                     <div className="rank-empty">
-                      本月還沒有任何通路營收——到下方「每日營收與支出管理」輸入
-                      （或直接從 Excel 整批貼上），這裡會即時排出通路占比。
+                      本月還沒有任何通路營收——網店/POS/廣告由自動餵數每日 07:31
+                      寫入昨日；蝦皮請用上方「填昨日蝦皮」手動輸入，這裡會即時排出通路占比。
                     </div>
                   )}
                   {donutData.map((item, i) => (
@@ -4804,7 +5099,7 @@ function Dashboard() {
                 <div className="roas-box">
                   <div className="roas-label">整體 MER</div>
                   <div className="roas-value">{roasFmt(roasStats.mer)}</div>
-                  <div className="roas-note">總營收 ÷ 總廣告費</div>
+                  <div className="roas-note">總營收 ÷ 總廣告費（均計至昨日）</div>
                 </div>
                 <div className="roas-box">
                   <div className="roas-label">網店 ROAS</div>
@@ -4876,7 +5171,17 @@ function Dashboard() {
                       <div key={key} className="cost-item">
                         <div className="cost-head">
                           <div>
-                            <div className="cost-title">{labelOf(key)}</div>
+                            <div className="cost-title">
+                              {labelOf(key)}
+                              {(key === "google" || key === "fb") && (
+                                <span
+                                  className="auto-chip"
+                                  title="由自動餵數維護（月累計至昨日）"
+                                >
+                                  自動
+                                </span>
+                              )}
+                            </div>
                             <div className="cost-sub">
                               佔營收{" "}
                               {currentRevenue
@@ -5005,6 +5310,15 @@ function Dashboard() {
                     <Upload size={13} />
                     匯入備份
                   </button>
+                  <button
+                    type="button"
+                    className="btn-add"
+                    onClick={jumpToYesterdayShopee}
+                    title="跳到本月昨日的蝦皮輸入格（唯一需手動輸入的欄位）"
+                  >
+                    <Zap size={13} />
+                    填昨日蝦皮
+                  </button>
                   <input
                     ref={fileInputRef}
                     type="file"
@@ -5013,16 +5327,11 @@ function Dashboard() {
                     onChange={handleImportFile}
                   />
                 </div>
-                <div
-                  style={{
-                    marginBottom: 6,
-                    display: "flex",
-                    justifyContent: "flex-end",
-                  }}
-                >
+                <div className="header-sync-row">
                   <SyncBadge
                     syncState={syncState}
                     lastSyncedAt={lastSyncedAt}
+                    onRetry={retrySync}
                   />
                 </div>
                 <div
@@ -5057,7 +5366,17 @@ function Dashboard() {
                   <div className="ad-grid">
                     {adSpendEntries.map(([key, value]) => (
                       <div key={key} className="mini-card">
-                        <div className="mini-label">{labelOf(key)}</div>
+                        <div className="mini-label">
+                          {labelOf(key)}
+                          {(key === "google" || key === "fb") && (
+                            <span
+                              className="auto-chip"
+                              title="由自動餵數維護（月累計至昨日）"
+                            >
+                              自動
+                            </span>
+                          )}
+                        </div>
                         <div className="mini-row">
                           <input
                             type="text"
@@ -5133,7 +5452,22 @@ function Dashboard() {
                       );
                       return (
                         <div key={o.key} className="order-row">
-                          <div className="channel-name">{labelOf(o.key)}</div>
+                          <div className="channel-name">
+                            {labelOf(o.key)}
+                            {(o.key === "web" || o.key === "pos") && (
+                              <span
+                                className="auto-chip"
+                                title="單數由自動餵數維護（月累計至昨日）"
+                              >
+                                自動
+                              </span>
+                            )}
+                            {o.key === "shopee" && (
+                              <span className="auto-chip manual" title="需手動輸入">
+                                手動
+                              </span>
+                            )}
+                          </div>
                           <div>
                             <input
                               type="text"
@@ -5250,6 +5584,18 @@ function Dashboard() {
 
               {/* Table Area */}
               <div style={{ minWidth: 0 }}>
+                {autoEditNotice && (
+                  <div className="auto-warn" role="status">
+                    <AlertTriangle size={14} />
+                    <span>
+                      網店／POS／Google／Meta 由自動餵數維護：手動修改的值會在
+                      次日 07:31 被校正回 API 真值（近 14 天回刷）。需要手動輸入的只有蝦皮。
+                    </span>
+                    <button type="button" onClick={() => setAutoEditNotice(false)}>
+                      知道了
+                    </button>
+                  </div>
+                )}
                 <div className="toolbar">
                   <div className="toolbar-left">
                     <div className="field-box">
@@ -5407,6 +5753,21 @@ function Dashboard() {
                       平日均 <strong>{money(dayTypeStats.avgWeekday)}</strong>
                       <span>({dayTypeStats.wdDays}天)</span>
                     </div>
+                    {holidayTableIncomplete(
+                      getCalendarYearMonth(activeYear, activeMonth).calendarYear
+                    ) && (
+                      <div
+                        className="range-chip"
+                        title="農曆假日（春節/端午/中秋等）需等官方行事曆公布後增補到 TW_HOLIDAYS"
+                      >
+                        ⚠{" "}
+                        {
+                          getCalendarYearMonth(activeYear, activeMonth)
+                            .calendarYear
+                        }{" "}
+                        假日表未補齊，平/假日分析僅供參考
+                      </div>
+                    )}
                     <div className="range-chip">
                       假日均 <strong>{money(dayTypeStats.avgWeekend)}</strong>
                       <span>({dayTypeStats.weDays}天)</span>
@@ -5448,6 +5809,22 @@ function Dashboard() {
                               style={{ color: colorOf(ch.key, 0, theme) }}
                             >
                               {ch.label}
+                              {(ch.key === "web" || ch.key === "pos") && (
+                                <span
+                                  className="auto-chip"
+                                  title="由自動餵數維護（每日 07:31 寫入昨日），手動修改會在次日被校正"
+                                >
+                                  自動
+                                </span>
+                              )}
+                              {ch.key === "shopee" && (
+                                <span
+                                  className="auto-chip manual"
+                                  title="蝦皮尚未接 API，需手動輸入（可用上方「填昨日蝦皮」）"
+                                >
+                                  手動
+                                </span>
+                              )}
                             </th>
                           ))}
                           {monthData.dynamicChannels.map((key) => (
@@ -5639,11 +6016,7 @@ function Dashboard() {
                       type="button"
                       className="btn-add"
                       style={{ marginLeft: 8, padding: "4px 10px" }}
-                      onClick={() => {
-                        setSyncState("idle");
-                        setAuthReady(false);
-                        setTimeout(() => setAuthReady(true), 100);
-                      }}
+                      onClick={retrySync}
                     >
                       重試同步
                     </button>
