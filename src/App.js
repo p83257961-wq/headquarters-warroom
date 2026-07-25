@@ -1467,6 +1467,30 @@ function sanitizeAllYears(data) {
   return result;
 }
 
+// 合併月份資料時保留「bot 代管欄位」的最新值（base 為底，auto 欄位取 authoritative）。
+// undo/redo 還原與開機髒月合併都用它——避免把 bot 已校正的自動欄位回滾成舊值
+function mergeKeepAuto(base, authoritative) {
+  if (!authoritative) return base;
+  const pick = (src, keys) =>
+    Object.fromEntries(
+      keys
+        .filter((k) => src?.[k] !== undefined)
+        .map((k) => [k, src[k]])
+    );
+  return {
+    ...base,
+    rows: (base.rows || []).map((r, i) => ({
+      ...r,
+      ...pick(authoritative.rows?.[i], AUTO_REV_KEYS),
+    })),
+    adSpend: { ...(base.adSpend || {}), ...pick(authoritative.adSpend, AUTO_AD_KEYS) },
+    orderOverrides: {
+      ...(base.orderOverrides || {}),
+      ...pick(authoritative.orderOverrides, AUTO_REV_KEYS),
+    },
+  };
+}
+
 // 判斷單一月份是否含有任何使用者資料（非空白骨架）。
 // 以 WeakMap 依月份物件參考快取：state 不可變更新下，沒動過的月份直接命中，
 // 讓「每次輸入都要掃 12 個月」的呼叫端（頁籤圓點、裁剪）成本趨近於零
@@ -1570,9 +1594,54 @@ function SyncBadge({ syncState, lastSyncedAt, onRetry }) {
   );
 }
 
-// bot 餵數新鮮度徽章：讀文件 feedAt 欄位；>26 小時未更新＝排程掛了轉紅警示，
-// 讓老闆不會對著過期數字做決策（bot 靜默失敗的死活偵測）
-function FeedBadge({ feedAt }) {
+// bot 餵數新鮮度徽章：同時監看兩支腳本的心跳（wr_feed 的 feedAt、shopee_feed 的
+// feedAtShopee），取「較舊的一支」判斷——只要有一邊掛掉就轉紅，避免「網店有更新、
+// 蝦皮已停擺」卻顯示綠燈的假安全（bot 靜默失敗的死活偵測）
+function FeedBadge({ feedAt, feedAtShopee }) {
+  const stamps = [feedAt, feedAtShopee].filter(Boolean);
+  const oldest =
+    stamps.length === 2
+      ? stamps.reduce((a, b) => (new Date(a) < new Date(b) ? a : b))
+      : null;
+  // 只有一支有紀錄＝另一支從未成功跑過，視同異常（顯示缺哪一支）
+  const missing = !feedAt ? "網店/POS" : !feedAtShopee ? "蝦皮" : null;
+  if (stamps.length && missing) {
+    const h = (Date.now() - new Date(stamps[0]).getTime()) / 3600000;
+    return (
+      <div
+        className="sync-badge sync-error"
+        role="status"
+        aria-live="polite"
+        title={`${missing} 餵數從未成功執行；另一支最後更新 ${new Date(stamps[0]).toLocaleString("zh-TW")}`}
+      >
+        <AlertTriangle size={13} />
+        <span>{missing} 餵數無紀錄</span>
+      </div>
+    );
+  }
+  if (oldest) {
+    const hours = (Date.now() - new Date(oldest).getTime()) / 3600000;
+    const stale = hours > 26;
+    const which =
+      new Date(feedAt) < new Date(feedAtShopee) ? "網店/POS" : "蝦皮";
+    return (
+      <div
+        className={`sync-badge ${stale ? "sync-error" : "sync-synced"}`}
+        role="status"
+        aria-live="polite"
+        title={`網店/POS：${new Date(feedAt).toLocaleString("zh-TW")}\n蝦皮：${new Date(
+          feedAtShopee
+        ).toLocaleString("zh-TW")}`}
+      >
+        {stale ? <AlertTriangle size={13} /> : <CheckCircle2 size={13} />}
+        <span>
+          {stale
+            ? `${which} 餵數中斷 ${Math.floor(hours)} 小時`
+            : `自動餵數 ${hours < 1.5 ? "1 小時內" : Math.floor(hours) + " 小時前"}`}
+        </span>
+      </div>
+    );
+  }
   if (!feedAt) {
     return (
       <div
@@ -1792,6 +1861,7 @@ function Dashboard() {
   const [briefCopied, setBriefCopied] = useState(false);
   // bot 最後餵數時間（文件 feedAt 欄位）；freshTick 每 5 分鐘重算新鮮度顯示
   const [feedAt, setFeedAt] = useState(null);
+  const [feedAtShopee, setFeedAtShopee] = useState(null);
   const [, setFreshTick] = useState(0);
   // 手改自動欄位的一次性提醒（按過「知道了」後本次工作階段不再出現）
   const [autoEditNoticeState, setAutoEditNoticeState] = useState(false);
@@ -1943,37 +2013,10 @@ function Dashboard() {
       Object.keys(entry.months).forEach((m) => {
         const snap = sanitizeMonthState(entry.months[m]);
         const cur = safeYear[m];
-        // bot 代管欄位（web/pos 日格、Google/Meta 廣告費、web/pos 單數）
-        // 不隨復原回滾——這些欄位的真相在 API，快照可能早於 bot 校正，
-        // 復原只作用於手 key 欄位（蝦皮/momo/其他/成長率以外的月內資料）
-        restored[m] = cur
-          ? {
-              ...snap,
-              rows: snap.rows.map((r, i) => ({
-                ...r,
-                web: cur.rows?.[i]?.web ?? r.web,
-                pos: cur.rows?.[i]?.pos ?? r.pos,
-              })),
-              adSpend: {
-                ...snap.adSpend,
-                ...(cur.adSpend?.google !== undefined
-                  ? { google: cur.adSpend.google }
-                  : {}),
-                ...(cur.adSpend?.fb !== undefined
-                  ? { fb: cur.adSpend.fb }
-                  : {}),
-              },
-              orderOverrides: {
-                ...snap.orderOverrides,
-                ...(cur.orderOverrides?.web !== undefined
-                  ? { web: cur.orderOverrides.web }
-                  : {}),
-                ...(cur.orderOverrides?.pos !== undefined
-                  ? { pos: cur.orderOverrides.pos }
-                  : {}),
-              },
-            }
-          : snap;
+        // bot 代管欄位（AUTO_REV_KEYS 日格與單數、AUTO_AD_KEYS 廣告費）不隨復原回滾——
+        // 這些欄位的真相在 API，快照可能早於 bot 校正；復原只作用於手 key 欄位
+        //（momo/其他等未自動化通路）。用常數迭代，日後新增自動通路不會漏改
+        restored[m] = cur ? mergeKeepAuto(snap, cur) : snap;
       });
       return { ...prev, [entry.year]: restored };
     });
@@ -2249,6 +2292,7 @@ function Dashboard() {
           const remote = snap.data() || {};
           // bot 新鮮度：無論後續是否套用資料，都先更新餵數時間
           if (remote.feedAt) setFeedAt(remote.feedAt);
+          if (remote.feedAtShopee) setFeedAtShopee(remote.feedAtShopee);
           const isOwnEcho = remote.updatedBy === clientIdRef.current;
           if (hydratedRef.current && isOwnEcho) {
             setSyncState("synced");
@@ -2273,34 +2317,8 @@ function Dashboard() {
               const localMonth = localYears?.[y]?.[m];
               const remoteMonth = remoteYears?.[y]?.[m];
               if (!localMonth) return;
-              const merged = remoteMonth
-                ? {
-                    ...localMonth,
-                    rows: (localMonth.rows || []).map((r, i) => ({
-                      ...r,
-                      web: remoteMonth.rows?.[i]?.web ?? r.web,
-                      pos: remoteMonth.rows?.[i]?.pos ?? r.pos,
-                    })),
-                    adSpend: {
-                      ...(localMonth.adSpend || {}),
-                      ...(remoteMonth.adSpend?.google !== undefined
-                        ? { google: remoteMonth.adSpend.google }
-                        : {}),
-                      ...(remoteMonth.adSpend?.fb !== undefined
-                        ? { fb: remoteMonth.adSpend.fb }
-                        : {}),
-                    },
-                    orderOverrides: {
-                      ...(localMonth.orderOverrides || {}),
-                      ...(remoteMonth.orderOverrides?.web !== undefined
-                        ? { web: remoteMonth.orderOverrides.web }
-                        : {}),
-                      ...(remoteMonth.orderOverrides?.pos !== undefined
-                        ? { pos: remoteMonth.orderOverrides.pos }
-                        : {}),
-                    },
-                  }
-                : localMonth;
+              // 本機月份為底（保住未上雲的手 key），bot 代管欄位一律吃遠端最新
+              const merged = mergeKeepAuto(localMonth, remoteMonth);
               remoteYears[y] = { ...(remoteYears[y] || {}), [m]: merged };
             });
           }
@@ -2383,9 +2401,10 @@ function Dashboard() {
             updatedAt: serverTimestamp(),
             updatedAtClient: new Date().toISOString(),
             updatedBy: clientIdRef.current,
-            // 整份覆寫會刪掉不在 payload 的欄位：保留 bot 的餵數心跳，
+            // 整份覆寫會刪掉不在 payload 的欄位：保留兩支 bot 的餵數心跳，
             // 否則匯入還原後新鮮度徽章會誤報「無紀錄」直到次日 07:31
             ...(feedAt ? { feedAt } : {}),
+            ...(feedAtShopee ? { feedAtShopee } : {}),
           });
           fullWriteRef.current = false;
           docExistsRef.current = true;
@@ -2895,8 +2914,13 @@ function Dashboard() {
     // 防線：全通路已自動餵數，唯一風險是排程沒跑（數字停在更早的日子）——
     // 餵數逾時就先確認再複製，避免低報數字直接進 LINE
     const warns = [];
-    if (feedAt && Date.now() - new Date(feedAt).getTime() > 26 * 3600000)
-      warns.push("自動餵數已超過 26 小時未更新");
+    [
+      ["網店/POS", feedAt],
+      ["蝦皮", feedAtShopee],
+    ].forEach(([name, ts]) => {
+      if (ts && Date.now() - new Date(ts).getTime() > 26 * 3600000)
+        warns.push(`${name} 餵數已超過 26 小時未更新`);
+    });
     if (
       warns.length &&
       !window.confirm(`⚠ ${warns.join("；")}——摘要可能低報，仍要複製？`)
@@ -4518,7 +4542,7 @@ function Dashboard() {
                   {theme === "dark" ? "Dark" : "Light"}
                 </span>
               </button>
-              <FeedBadge feedAt={feedAt} />
+              <FeedBadge feedAt={feedAt} feedAtShopee={feedAtShopee} />
               <SyncBadge
                 syncState={syncState}
                 lastSyncedAt={lastSyncedAt}
