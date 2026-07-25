@@ -100,6 +100,10 @@ const CHANNEL_KEY_RE = /^[a-z0-9一-龥_-]{1,12}$/;
 // 查無對應且無同名營收通路者，會被列為「未歸因廣告費」提醒
 const AD_ATTRIBUTION = { google: "web", fb: "web", shopee: "shopee", momo: "momo" };
 
+// 自動餵數維護的欄位（bot 每日寫入，手改會被次日校正回 API 真值）
+const AUTO_REV_KEYS = ["web", "pos", "shopee"];
+const AUTO_AD_KEYS = ["google", "fb", "shopee"];
+
 // 決策基準線：網店 ROAS 基準（Google Ads 帳戶基準 6.7x）、行銷費常態佔營收 ≤9%
 const ROAS_BENCHMARKS = { web: 6.7 };
 const AD_PCT_NORM = 9;
@@ -2048,7 +2052,7 @@ function Dashboard() {
   }, []);
 
   const setRowValue = (day, key, value) => {
-    if (key === "web" || key === "pos") setAutoEditNotice(true);
+    if (AUTO_REV_KEYS.includes(key)) setAutoEditNotice(true);
     updateActiveMonth(
       (prev) => ({
         ...prev,
@@ -2128,7 +2132,7 @@ function Dashboard() {
   };
 
   const setAdSpendValue = (key, value) => {
-    if (key === "google" || key === "fb") setAutoEditNotice(true);
+    if (AUTO_AD_KEYS.includes(key)) setAutoEditNotice(true);
     updateActiveMonth(
       (prev) => ({
         ...prev,
@@ -2187,7 +2191,7 @@ function Dashboard() {
   };
 
   const setOrderOverride = (key, value) => {
-    if (key === "web" || key === "pos") setAutoEditNotice(true);
+    if (AUTO_REV_KEYS.includes(key)) setAutoEditNotice(true);
     updateActiveMonth(
       (prev) => ({
         ...prev,
@@ -2888,22 +2892,9 @@ function Dashboard() {
         ].join("\n");
 
   const copyBrief = async () => {
-    // 防線：昨日蝦皮未填或餵數逾時，先確認再複製——避免低報數字直接進 LINE。
-    // 用真正的昨日日期定位（每月 1 日會正確查上個月最後一天），且只要檢視的是
-    // 進行中年度就檢查（YTD 含昨日，不限當前月分頁）
+    // 防線：全通路已自動餵數，唯一風險是排程沒跑（數字停在更早的日子）——
+    // 餵數逾時就先確認再複製，避免低報數字直接進 LINE
     const warns = [];
-    if (runningMonthTab) {
-      const yd = new Date(_today.getFullYear(), _today.getMonth(), _today.getDate() - 1);
-      const yFy =
-        yd.getMonth() + 1 >= 4
-          ? String(yd.getFullYear())
-          : String(yd.getFullYear() - 1);
-      const yRow = allYears[yFy]?.[`${yd.getMonth() + 1}月`]?.rows?.find(
-        (r) => r.day === yd.getDate()
-      );
-      if (!String(yRow?.shopee ?? "").trim())
-        warns.push(`昨日（${yd.getMonth() + 1}/${yd.getDate()}）蝦皮尚未輸入`);
-    }
     if (feedAt && Date.now() - new Date(feedAt).getTime() > 26 * 3600000)
       warns.push("自動餵數已超過 26 小時未更新");
     if (
@@ -3154,8 +3145,7 @@ function Dashboard() {
     // 多格貼上若覆蓋到自動欄位（web/pos），同樣要出提醒（單格輸入已有）
     const maxCols = Math.max(...lines.map((l) => l.split("\t").length));
     const touched = currentChannels.slice(startCol, startCol + maxCols);
-    if (touched.includes("web") || touched.includes("pos"))
-      setAutoEditNotice(true);
+    if (touched.some((k) => AUTO_REV_KEYS.includes(k))) setAutoEditNotice(true);
     updateActiveMonth((prev) => ({
       ...prev,
       rows: prev.rows.map((r) => {
@@ -3297,10 +3287,10 @@ function Dashboard() {
     setTimeout(() => setAuthReady(true), 100);
   };
 
-  // 跳到「昨日」的蝦皮輸入格（每天唯一要手 key 的動作，不用捲整版）。
+  // 跳到「昨日」那一列（快速查看最新一天的各通路數字，全通路已自動餵數）。
   // 用真正的昨日日期推月份與年度：每月 1 日會正確跳到上個月最後一天
   //（4/1 連會計年度都會正確切到前一年度的 3 月）
-  const jumpToYesterdayShopee = () => {
+  const jumpToYesterday = () => {
     const t = new Date();
     const y = new Date(t.getFullYear(), t.getMonth(), t.getDate() - 1);
     const fy =
@@ -3310,12 +3300,9 @@ function Dashboard() {
     const day = y.getDate();
     setTimeout(() => {
       const el = tableRef.current?.querySelector(
-        `tbody .cell-input[data-day="${day}"][data-ch="shopee"]`
+        `tbody .cell-input[data-day="${day}"][data-ch="web"]`
       );
-      if (el) {
-        el.scrollIntoView({ block: "center" });
-        el.focus();
-      }
+      if (el) el.scrollIntoView({ block: "center" });
     }, 250);
   };
 
@@ -5008,7 +4995,7 @@ function Dashboard() {
                   {deferredDonutData.length === 0 ? (
                     <div className="pie-empty">
                       本月尚無營收資料
-                      <span>網店/POS 由自動餵數每日補入昨日；蝦皮需手動輸入</span>
+                      <span>全通路由自動餵數每日 07:31 補入昨日資料</span>
                     </div>
                   ) : (
                   <ResponsiveContainer width="100%" height="100%">
@@ -5040,8 +5027,8 @@ function Dashboard() {
                 <div className="rank-list">
                   {donutData.length === 0 && (
                     <div className="rank-empty">
-                      本月還沒有任何通路營收——網店/POS/廣告由自動餵數每日 07:31
-                      寫入昨日；蝦皮請用上方「填昨日蝦皮」手動輸入，這裡會即時排出通路占比。
+                      本月還沒有任何通路營收——網店/POS/蝦皮與廣告費皆由自動餵數
+                      每日 07:31 寫入昨日資料，這裡會即時排出通路占比。
                     </div>
                   )}
                   {donutData.map((item, i) => (
@@ -5173,7 +5160,7 @@ function Dashboard() {
                           <div>
                             <div className="cost-title">
                               {labelOf(key)}
-                              {(key === "google" || key === "fb") && (
+                              {AUTO_AD_KEYS.includes(key) && (
                                 <span
                                   className="auto-chip"
                                   title="由自動餵數維護（月累計至昨日）"
@@ -5313,11 +5300,11 @@ function Dashboard() {
                   <button
                     type="button"
                     className="btn-add"
-                    onClick={jumpToYesterdayShopee}
-                    title="跳到本月昨日的蝦皮輸入格（唯一需手動輸入的欄位）"
+                    onClick={jumpToYesterday}
+                    title="跳到昨日那一列，查看最新一天的各通路數字"
                   >
                     <Zap size={13} />
-                    填昨日蝦皮
+                    看昨日
                   </button>
                   <input
                     ref={fileInputRef}
@@ -5368,7 +5355,7 @@ function Dashboard() {
                       <div key={key} className="mini-card">
                         <div className="mini-label">
                           {labelOf(key)}
-                          {(key === "google" || key === "fb") && (
+                          {AUTO_AD_KEYS.includes(key) && (
                             <span
                               className="auto-chip"
                               title="由自動餵數維護（月累計至昨日）"
@@ -5463,8 +5450,11 @@ function Dashboard() {
                               </span>
                             )}
                             {o.key === "shopee" && (
-                              <span className="auto-chip manual" title="需手動輸入">
-                                手動
+                              <span
+                                className="auto-chip"
+                                title="單數由自動餵數維護（蝦皮 Open API）"
+                              >
+                                自動
                               </span>
                             )}
                           </div>
@@ -5588,8 +5578,8 @@ function Dashboard() {
                   <div className="auto-warn" role="status">
                     <AlertTriangle size={14} />
                     <span>
-                      網店／POS／Google／Meta 由自動餵數維護：手動修改的值會在
-                      次日 07:31 被校正回 API 真值（近 14 天回刷）。需要手動輸入的只有蝦皮。
+                      網店／POS／蝦皮／Google／Meta 由自動餵數維護：手動修改的值會在
+                      次日 07:31 被校正回 API 真值。全部通路與廣告費皆已自動化，無需手動輸入。
                     </span>
                     <button type="button" onClick={() => setAutoEditNotice(false)}>
                       知道了
@@ -5819,10 +5809,10 @@ function Dashboard() {
                               )}
                               {ch.key === "shopee" && (
                                 <span
-                                  className="auto-chip manual"
-                                  title="蝦皮尚未接 API，需手動輸入（可用上方「填昨日蝦皮」）"
+                                  className="auto-chip"
+                                  title="由自動餵數維護（蝦皮 Open API，每日回刷近 2 個月）"
                                 >
-                                  手動
+                                  自動
                                 </span>
                               )}
                             </th>
