@@ -105,7 +105,8 @@ const AUTO_REV_KEYS = ["web", "pos", "shopee"];
 const AUTO_AD_KEYS = ["google", "fb", "shopee"];
 
 // 決策基準線：網店 ROAS 基準（Google Ads 帳戶基準 6.7x）、行銷費常態佔營收 ≤9%
-const ROAS_BENCHMARKS = { web: 6.7 };
+// 蝦皮基準＝2026 年 4-8 月實際 ROAS 中位數（4.0/11.1/13.2/11.1/17.5），老闆可隨時改
+const ROAS_BENCHMARKS = { web: 6.7, shopee: 11 };
 const AD_PCT_NORM = 9;
 
 const YEAR_OPTIONS = Array.from({ length: 31 }, (_, i) => String(2024 + i));
@@ -1624,6 +1625,9 @@ function FeedBadge({ feedAt, feedAtShopee }) {
     const stale = hours > 26;
     const which =
       new Date(feedAt) < new Date(feedAtShopee) ? "網店/POS" : "蝦皮";
+    // 正常態直接講「數據至哪一天」（心跳日的前一天）——老闆每天想確認的是這個，
+    // 不是腳本幾小時前活過；異常態才報中斷小時數
+    const dataEnd = new Date(new Date(oldest).getTime() - 86400000);
     return (
       <div
         className={`sync-badge ${stale ? "sync-error" : "sync-synced"}`}
@@ -1637,7 +1641,7 @@ function FeedBadge({ feedAt, feedAtShopee }) {
         <span>
           {stale
             ? `${which} 餵數中斷 ${Math.floor(hours)} 小時`
-            : `自動餵數 ${hours < 1.5 ? "1 小時內" : Math.floor(hours) + " 小時前"}`}
+            : `數據至 ${dataEnd.getMonth() + 1}/${dataEnd.getDate()} ✓`}
         </span>
       </div>
     );
@@ -1700,19 +1704,28 @@ function KPICard({
   );
 }
 
-function TooltipCard({ active, payload, label }) {
+function TooltipCard({ active, payload, label, runningMonth, runningYoY }) {
   if (!active || !payload?.length) return null;
   const actual = (payload.find((p) => p.dataKey === "actual") || {}).value || 0;
   const lastYear =
     (payload.find((p) => p.dataKey === "lastYear") || {}).value || 0;
   const target = (payload.find((p) => p.dataKey === "target") || {}).value || 0;
+  // 進行中月份：YoY 改用「同日區間」口徑（部分月 vs 去年整月會出假負值）
+  const isRunning = label === runningMonth;
   const yoy =
-    lastYear > 0 ? (((actual - lastYear) / lastYear) * 100).toFixed(1) : "0.0";
+    isRunning && runningYoY != null
+      ? runningYoY.toFixed(1)
+      : lastYear > 0
+      ? (((actual - lastYear) / lastYear) * 100).toFixed(1)
+      : "0.0";
   const achieve = target > 0 ? ((actual / target) * 100).toFixed(1) : "0.0";
   const yoyPositive = Number(yoy) >= 0;
   return (
     <div className="tooltip-card">
-      <div className="tooltip-month">{label}</div>
+      <div className="tooltip-month">
+        {label}
+        {isRunning && <span className="tooltip-running">月進行中</span>}
+      </div>
       <div className="tooltip-list">
         <div className="tooltip-row">
           <span
@@ -1731,7 +1744,7 @@ function TooltipCard({ active, payload, label }) {
           <span className="tooltip-val mono sec">{num(lastYear)}</span>
         </div>
         <div className="tooltip-yoy-box">
-          <span>YoY</span>
+          <span>{isRunning ? "同期 YoY" : "YoY"}</span>
           <strong className={yoyPositive ? "yoy-pos" : "yoy-neg"}>
             {yoyPositive ? "+" : ""}
             {yoy}%
@@ -2733,6 +2746,26 @@ function Dashboard() {
   }, 0);
   const ytdYoY = ytdLastYear ? ((ytd - ytdLastYear) / ytdLastYear) * 100 : 0;
 
+  // 本月預估落點（進行中月份）：本月至昨日實績 ÷ 去年同日區間佔全月比重（季節加權），
+  // 去年無日資料時退回線性推算——月底「需日均」達不到時，老闆真正要的是這個數字
+  const monthProjection = (() => {
+    if (!_isRunningMonth(activeMonth) || runningElapsed === 0 || !currentRevenue)
+      return null;
+    const sp = lastYearSamePeriodOfRunning();
+    const fullLY = currentChart.lastYear || 0;
+    if (sp > 0 && fullLY > 0) return Math.round(currentRevenue / (sp / fullLY));
+    return Math.round((currentRevenue / runningElapsed) * daysInMonth);
+  })();
+
+  // 趨勢圖 tooltip 用：進行中月份的同日區間 YoY（部分月比去年整月會出假負值）
+  const runningTrendYoY = (() => {
+    if (!runningMonthTab) return null;
+    const item = chartData.find((i) => i.month === runningMonthTab);
+    const sp = lastYearSamePeriodOfRunning();
+    if (!item || sp <= 0) return null;
+    return ((item.actual - sp) / sp) * 100;
+  })();
+
   // 當月 YoY：進行中月份比「去年同日區間（至昨日）」——與年度同期口徑一致，
   // 不再拿部分月比去年整月（那會讓每月前三週天天亮假紅字）；其他月份維持整月對整月
   const monthYoyBase = _isRunningMonth(activeMonth)
@@ -2897,8 +2930,17 @@ function Dashboard() {
               ? `，剩餘需月均 ${money(needMonthly)}`
               : "，全年實績已完整"
           }。`,
-          `${activeMonth}實績 ${money(currentRevenue)}${
+          `${activeMonth}${
+            paceInfo.status === "past" ? "收官" : "實績"
+          } ${money(currentRevenue)}${
             currentTarget > 0 ? `（達成 ${achieveRate.toFixed(1)}%）` : ""
+          }${
+            monthProjection && currentTarget > 0
+              ? `，預估收 ${money(monthProjection)}（~${(
+                  (monthProjection / currentTarget) *
+                  100
+                ).toFixed(0)}%）`
+              : ""
           }${
             paceInfo.status === "current" && paceInfo.hasTarget
               ? paceInfo.needDaily > 0
@@ -4243,6 +4285,29 @@ function Dashboard() {
           color: #E5E7EB;
           font-size: 14px;
         }
+        .tooltip-running {
+          display: inline-block;
+          margin-left: 8px;
+          font-size: 10px;
+          font-weight: 700;
+          letter-spacing: .05em;
+          color: var(--gold);
+          border: 1px dashed var(--gold-dim);
+          border-radius: 5px;
+          padding: 1px 6px;
+          vertical-align: 3px;
+        }
+        .month-start-hint {
+          display: flex; align-items: center; gap: 12px;
+          border: 1px solid var(--border-bright);
+          background: var(--bg-surface);
+          border-radius: 12px;
+          padding: 10px 14px;
+          margin-bottom: 14px;
+          font-size: 13px; color: var(--text-secondary);
+        }
+        .month-start-hint .btn-add { margin-left: auto; flex: 0 0 auto; }
+
         .tooltip-month {
           font-family: 'DM Mono', monospace;
           font-size: 20px;
@@ -4585,6 +4650,20 @@ function Dashboard() {
             </div>
           </div>
 
+          {/* 月初捷徑：新月份還沒有數據時，一鍵回看上月收官（重用「看昨日」的跨月邏輯） */}
+          {_today.getDate() <= 3 &&
+            _isRunningMonth(activeMonth) &&
+            currentRevenue === 0 && (
+              <div className="month-start-hint">
+                <span>
+                  {activeMonth}剛開始，自動餵數今晚會補入第一天——先回顧上個月的收官數字？
+                </span>
+                <button type="button" className="btn-add" onClick={jumpToYesterday}>
+                  回看上月收官
+                </button>
+              </div>
+            )}
+
           {/* ── KPI CARDS ── */}
           <section className="grid-3">
             <KPICard
@@ -4710,7 +4789,12 @@ function Dashboard() {
                           }}
                         />
                         <Tooltip
-                          content={<TooltipCard />}
+                          content={
+                            <TooltipCard
+                              runningMonth={runningMonthTab}
+                              runningYoY={runningTrendYoY}
+                            />
+                          }
                           cursor={{ fill: tc.goldGlow }}
                         />
                         <Line
@@ -4745,20 +4829,21 @@ function Dashboard() {
                             if (d && d.month) loadMonth(d.month);
                           }}
                         >
-                          {deferredTrendData.map((entry) => (
-                            <Cell
-                              key={entry.month}
-                              fillOpacity={
-                                entry.month === activeMonth ? 1 : 0.55
-                              }
-                              stroke={
-                                entry.month === activeMonth ? tc.gold : "none"
-                              }
-                              strokeWidth={
-                                entry.month === activeMonth ? 1.5 : 0
-                              }
-                            />
-                          ))}
+                          {deferredTrendData.map((entry) => {
+                            const isRun = entry.month === runningMonthTab;
+                            const isAct = entry.month === activeMonth;
+                            return (
+                              <Cell
+                                key={entry.month}
+                                // 進行中月份：半透明＋虛線框＝「這根還沒長完」，
+                                // 避免月中被誤讀成衰退
+                                fillOpacity={isRun ? 0.45 : isAct ? 1 : 0.55}
+                                stroke={isRun || isAct ? tc.gold : "none"}
+                                strokeWidth={isAct ? 1.5 : isRun ? 1.2 : 0}
+                                strokeDasharray={isRun ? "4 3" : undefined}
+                              />
+                            );
+                          })}
                         </Bar>
                       </ComposedChart>
                     </ResponsiveContainer>
@@ -4787,11 +4872,20 @@ function Dashboard() {
                       {!paceInfo.hasTarget
                         ? "去年同月無資料，無法推算目標"
                         : paceInfo.status === "current"
-                        ? paceInfo.needDaily <= 0
-                          ? `已超越月目標 · 剩 ${paceInfo.remaining} 天`
-                          : `剩 ${paceInfo.remaining} 天需日均 · 時間 ${paceInfo.timePct.toFixed(
-                              0
-                            )}% vs 達成 ${achieveRate.toFixed(0)}%`
+                        ? `${
+                            paceInfo.needDaily <= 0
+                              ? `已超越月目標 · 剩 ${paceInfo.remaining} 天`
+                              : `剩 ${paceInfo.remaining} 天需日均 · 時間 ${paceInfo.timePct.toFixed(
+                                  0
+                                )}% vs 達成 ${achieveRate.toFixed(0)}%`
+                          }${
+                            monthProjection && currentTarget > 0
+                              ? ` ｜預估收 ${money(monthProjection)}（~${(
+                                  (monthProjection / currentTarget) *
+                                  100
+                                ).toFixed(0)}%）`
+                              : ""
+                          }`
                         : paceInfo.status === "past"
                         ? `當月達成 ${achieveRate.toFixed(1)}%`
                         : `月目標 ${money(currentTarget)}`}
@@ -5131,8 +5225,20 @@ function Dashboard() {
                 </div>
                 <div className="roas-box">
                   <div className="roas-label">蝦皮 ROAS</div>
-                  <div className="roas-value">{roasFmt(roasStats.shopee)}</div>
-                  <div className="roas-note">蝦皮營收 ÷ 蝦皮廣告</div>
+                  <div
+                    className={`roas-value ${
+                      !roasStats.shopee
+                        ? ""
+                        : roasStats.shopee >= ROAS_BENCHMARKS.shopee
+                        ? "good"
+                        : "bad"
+                    }`}
+                  >
+                    {roasFmt(roasStats.shopee)}
+                  </div>
+                  <div className="roas-note">
+                    蝦皮營收 ÷ 蝦皮廣告 · 基準 {ROAS_BENCHMARKS.shopee}x
+                  </div>
                 </div>
                 <div className="roas-box">
                   <div className="roas-label">廣告佔營收</div>
@@ -5338,13 +5444,8 @@ function Dashboard() {
                     onChange={handleImportFile}
                   />
                 </div>
-                <div className="header-sync-row">
-                  <SyncBadge
-                    syncState={syncState}
-                    lastSyncedAt={lastSyncedAt}
-                    onRetry={retrySync}
-                  />
-                </div>
+                {/* （表格頭原有的重複 SyncBadge 已移除——topbar 一顆即可，
+                    全自動化後這裡的邊際價值極低，2026-08-27 滿月體檢定案） */}
                 <div
                   style={{
                     fontFamily: "'DM Mono', monospace",
@@ -5672,13 +5773,14 @@ function Dashboard() {
                   </div>
                 </div>
 
-                {/* 日期區間：快選（全月/上中下旬）＋自訂起迄，右側即時比對去年同期與上月同區間 */}
+                {/* 日期區間：快選（全月＋進行中月份的「1-今日」）＋自訂起迄，
+                    右側即時比對去年同期與上月同區間（旬快選 2026-08-27 老闆拍板移除） */}
                 <div className="range-bar">
                   {[
                     { label: "全月", s: 1, e: 31 },
-                    { label: "1-10", s: 1, e: 10 },
-                    { label: "11-20", s: 11, e: 20 },
-                    { label: `21-${daysInMonth}`, s: 21, e: 31 },
+                    ...(_isRunningMonth(activeMonth)
+                      ? [{ label: `1-${_today.getDate()}`, s: 1, e: _today.getDate() }]
+                      : []),
                   ].map((p) => {
                     const pEnd = Math.min(p.e, daysInMonth);
                     const isActive =
