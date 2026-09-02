@@ -2804,8 +2804,17 @@ function Dashboard() {
     monthsWithActual.some((i) => i.month === runningMonthTab);
   // 資料口徑到「昨天」：bot 每日 07:31 寫昨日、蝦皮手 key 也是隔日補——
   // 已過天數＝今天-1、「今天」歸剩餘側，與達標配速卡（remaining 含今天）口徑一致
+  // 「已過天數」以實際資料為準：bot 只餵到昨天，但老闆會在日中手 key 今天的進度——
+  // 今天那列有數字就把今天算進去（純 bot 日子自然落在昨天），
+  // 讓區間快選、同期 YoY、配速、摘要天數都跟畫面上的金額同一口徑
+  const runningState = runningMonthTab
+    ? allYears[activeYear]?.[runningMonthTab]
+    : null;
+  const todayHasData =
+    !!runningState &&
+    sumMonthRange(runningState, _today.getDate(), _today.getDate()) > 0;
   const runningElapsed = runningMonthTab
-    ? Math.max(_today.getDate() - 1, 0)
+    ? Math.max(_today.getDate() - 1, 0) + (todayHasData ? 1 : 0)
     : 0;
   const runningFrac = runningMonthTab
     ? Math.min(runningElapsed / runningDim, 1)
@@ -3010,8 +3019,9 @@ function Dashboard() {
     const hasTarget = currentTarget > 0;
     if (!isCurrent)
       return { status: isPast ? "past" : "future", hasTarget };
-    const d = today.getDate();
-    const remaining = Math.max(daysInMonth - d + 1, 1);
+    // 已過天數＝runningElapsed（今天有手 key 進度就含今天，否則到昨天），
+    // 與區間快選、同期 YoY、runningFrac 同一口徑
+    const remaining = Math.max(daysInMonth - runningElapsed, 1);
     const needDaily = Math.max(
       0,
       Math.ceil((currentTarget - currentRevenue) / remaining)
@@ -3021,10 +3031,16 @@ function Dashboard() {
       hasTarget,
       remaining,
       needDaily,
-      // 已過時間＝今天-1（資料只到昨天；今天歸剩餘側，與 remaining/runningFrac 同口徑）
-      timePct: ((d - 1) / daysInMonth) * 100,
+      timePct: (runningElapsed / daysInMonth) * 100,
     };
-  }, [activeYear, activeMonth, daysInMonth, currentTarget, currentRevenue]);
+  }, [
+    activeYear,
+    activeMonth,
+    daysInMonth,
+    currentTarget,
+    currentRevenue,
+    runningElapsed,
+  ]);
 
   // 自動生成的戰情摘要：年度進度 → 全年預估與配速 → 本月現況，
   // 一鍵複製直接貼 LINE 回報，不用自己抄數字
@@ -4825,7 +4841,7 @@ function Dashboard() {
               title={`${activeMonth} 當月營收`}
               helper={
                 _isRunningMonth(activeMonth)
-                  ? "至昨日 · DAILY FEED"
+                  ? `${todayHasData ? "含今日進度" : "至昨日"} · DAILY FEED`
                   : paceInfo.status === "past"
                   ? "整月收官 · CLOSED"
                   : "尚未開始"
@@ -5047,7 +5063,7 @@ function Dashboard() {
                         ? "待餵數"
                         : _isRunningMonth(activeMonth) &&
                           runningElapsed < MONTH_PROJECTION_MIN_DAYS
-                        ? "樣本不足"
+                        ? "觀察中"
                         : yoy < -20
                         ? "⚠ 需注意"
                         : "✓ 正常"}
@@ -5057,7 +5073,7 @@ function Dashboard() {
                         ? "尚無本月資料"
                         : _isRunningMonth(activeMonth) &&
                           runningElapsed < MONTH_PROJECTION_MIN_DAYS
-                        ? `同期 YoY ${yoy.toFixed(1)}% · 滿 ${MONTH_PROJECTION_MIN_DAYS} 天再判讀`
+                        ? `同期 YoY ${yoy >= 0 ? "+" : ""}${yoy.toFixed(1)}%（${runningElapsed} 天樣本，滿 ${MONTH_PROJECTION_MIN_DAYS} 天判讀）`
                         : `${_isRunningMonth(activeMonth) ? "同期 " : ""}YoY ${yoy.toFixed(1)}%`}
                     </div>
                   </div>
@@ -5966,8 +5982,9 @@ function Dashboard() {
                 <div className="range-bar">
                   {[
                     { label: "全月", s: 1, e: 31 },
-                    // 「1-昨日」：資料只到昨天，區間對照（去年同期/上月同區間）才會與
-                    // KPI 的同日區間口徑一致；每月 1 日沒有昨日、不顯示
+                    // 「1-N」＝到已有資料的最後一天（今天有手 key 進度就含今天，
+                    // 否則到昨天）：區間對照才會與 KPI 的同日區間口徑一致；
+                    // 每月 1 日沒有資料時不顯示
                     ...(_isRunningMonth(activeMonth) && runningElapsed > 0
                       ? [{ label: `1-${runningElapsed}`, s: 1, e: runningElapsed }]
                       : []),
