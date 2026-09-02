@@ -185,15 +185,32 @@ const TW_HOLIDAYS = {
     "10-26": "光復節補假",
     "12-25": "行憲紀念日",
   },
+  // 2027（民國 116 年）依行政院 2026-05 核定之政府行政機關辦公日曆表補齊（全年 0 補班日）
   2027: {
     "1-1": "元旦",
+    "2-4": "小年夜",
+    "2-5": "除夕",
+    "2-6": "春節初一",
+    "2-7": "春節初二",
+    "2-8": "春節初三",
+    "2-9": "春節補假",
+    "2-10": "春節補假",
+    "2-28": "和平紀念日",
     "3-1": "228補假",
-    "4-5": "清明補假",
+    "4-4": "兒童節",
+    "4-5": "清明節",
+    "4-6": "兒童節補假",
     "4-30": "勞動節補假",
+    "5-1": "勞動節",
+    "6-9": "端午節",
+    "9-15": "中秋節",
     "9-28": "教師節",
+    "10-10": "國慶日",
     "10-11": "國慶補假",
     "10-25": "光復節",
+    "12-24": "行憲補假",
     "12-25": "行憲紀念日",
+    "12-31": "元旦補假(2028)",
   },
 };
 
@@ -1324,12 +1341,15 @@ function parsePastedNumber(cell) {
 }
 
 // 加總某月份在指定日期區間內的全通路營收
-function sumMonthRange(monthState, startDay, endDay) {
+// channelKey 省略＝全通路；指定單一通路時只加該欄（趨勢圖篩單通路的同期口徑用）
+function sumMonthRange(monthState, startDay, endDay, channelKey) {
   if (!monthState) return 0;
-  const chs = [
-    ...FIXED_CHANNELS.map((c) => c.key),
-    ...(monthState.dynamicChannels || []),
-  ];
+  const chs = channelKey
+    ? [channelKey]
+    : [
+        ...FIXED_CHANNELS.map((c) => c.key),
+        ...(monthState.dynamicChannels || []),
+      ];
   return (monthState.rows || [])
     .filter((r) => r.day >= startDay && r.day <= endDay)
     .reduce((s, row) => s + chs.reduce((rs, k) => rs + n(row[k]), 0), 0);
@@ -1595,10 +1615,48 @@ function SyncBadge({ syncState, lastSyncedAt, onRetry }) {
   );
 }
 
+// 兩支心跳 → 新鮮度狀態（FeedBadge 與 copyBrief 共用同一口徑，不會分家）。
+// dataEnd 優先用腳本實際回報的資料迄日（feedDataTo*，YYYY-MM-DD），
+// 缺時才退回「較舊心跳的日期 −1 天」推算
+function feedFreshness(feedAt, feedAtShopee, feedDataTo, feedDataToShopee) {
+  if (!feedAt || !feedAtShopee) return null;
+  const a = new Date(feedAt);
+  const b = new Date(feedAtShopee);
+  const oldest = a < b ? a : b;
+  const which = a < b ? "網店/POS" : "蝦皮";
+  const hours = (Date.now() - oldest.getTime()) / 3600000;
+  const stale = hours > 26;
+  const parseDay = (s) => {
+    if (!s) return null;
+    const [y, m, d] = String(s).split("-").map(Number);
+    return y && m && d ? new Date(y, m - 1, d) : null;
+  };
+  const reported = [parseDay(feedDataTo), parseDay(feedDataToShopee)].filter(Boolean);
+  const dataEnd =
+    reported.length === 2
+      ? reported[0] < reported[1]
+        ? reported[0]
+        : reported[1]
+      : new Date(oldest.getTime() - 86400000);
+  const yday = new Date();
+  yday.setHours(0, 0, 0, 0);
+  yday.setDate(yday.getDate() - 1);
+  const dataEndDay = new Date(dataEnd.getFullYear(), dataEnd.getMonth(), dataEnd.getDate());
+  const lagging = !stale && dataEndDay < yday;
+  return {
+    which,
+    hours,
+    stale,
+    lagging,
+    label: `${dataEnd.getMonth() + 1}/${dataEnd.getDate()}`,
+    reported: reported.length === 2,
+  };
+}
+
 // bot 餵數新鮮度徽章：同時監看兩支腳本的心跳（wr_feed 的 feedAt、shopee_feed 的
 // feedAtShopee），取「較舊的一支」判斷——只要有一邊掛掉就轉紅，避免「網店有更新、
 // 蝦皮已停擺」卻顯示綠燈的假安全（bot 靜默失敗的死活偵測）
-function FeedBadge({ feedAt, feedAtShopee }) {
+function FeedBadge({ feedAt, feedAtShopee, feedDataTo, feedDataToShopee }) {
   const stamps = [feedAt, feedAtShopee].filter(Boolean);
   const oldest =
     stamps.length === 2
@@ -1620,28 +1678,38 @@ function FeedBadge({ feedAt, feedAtShopee }) {
       </div>
     );
   }
-  if (oldest) {
-    const hours = (Date.now() - new Date(oldest).getTime()) / 3600000;
-    const stale = hours > 26;
-    const which =
-      new Date(feedAt) < new Date(feedAtShopee) ? "網店/POS" : "蝦皮";
-    // 正常態直接講「數據至哪一天」（心跳日的前一天）——老闆每天想確認的是這個，
-    // 不是腳本幾小時前活過；異常態才報中斷小時數
-    const dataEnd = new Date(new Date(oldest).getTime() - 86400000);
+  const fr = feedFreshness(feedAt, feedAtShopee, feedDataTo, feedDataToShopee);
+  if (fr) {
+    const { stale, lagging, which, hours, label, reported } = fr;
+    // 正常態直接講「數據至哪一天」——老闆每天想確認的是這個，不是腳本幾小時前活過；
+    // 「數據至」比昨天還舊（今晨兩班都還沒跑）給藍色「待今晨補數」不給綠勾；
+    // 異常態才報中斷小時數
+    const detail = `網店/POS：${new Date(feedAt).toLocaleString("zh-TW")}；蝦皮：${new Date(
+      feedAtShopee
+    ).toLocaleString("zh-TW")}${reported ? "（資料迄日由腳本回報）" : "（資料迄日依心跳時間推算）"}`;
     return (
       <div
-        className={`sync-badge ${stale ? "sync-error" : "sync-synced"}`}
+        className={`sync-badge ${
+          stale ? "sync-error" : lagging ? "sync-syncing" : "sync-synced"
+        }`}
         role="status"
         aria-live="polite"
-        title={`網店/POS：${new Date(feedAt).toLocaleString("zh-TW")}\n蝦皮：${new Date(
-          feedAtShopee
-        ).toLocaleString("zh-TW")}`}
+        aria-label={detail}
+        title={detail.replace("；", "\n")}
       >
-        {stale ? <AlertTriangle size={13} /> : <CheckCircle2 size={13} />}
+        {stale ? (
+          <AlertTriangle size={13} />
+        ) : lagging ? (
+          <Cloud size={13} />
+        ) : (
+          <CheckCircle2 size={13} />
+        )}
         <span>
           {stale
             ? `${which} 餵數中斷 ${Math.floor(hours)} 小時`
-            : `數據至 ${dataEnd.getMonth() + 1}/${dataEnd.getDate()} ✓`}
+            : lagging
+            ? `數據至 ${label}（待今晨補數）`
+            : `數據至 ${label} ✓`}
         </span>
       </div>
     );
@@ -1704,22 +1772,34 @@ function KPICard({
   );
 }
 
-function TooltipCard({ active, payload, label, runningMonth, runningYoY }) {
+function TooltipCard({
+  active,
+  payload,
+  label,
+  runningMonth,
+  runningYoY,
+  runningLastYear,
+  runningDays,
+}) {
   if (!active || !payload?.length) return null;
   const actual = (payload.find((p) => p.dataKey === "actual") || {}).value || 0;
-  const lastYear =
+  const lastYearFull =
     (payload.find((p) => p.dataKey === "lastYear") || {}).value || 0;
   const target = (payload.find((p) => p.dataKey === "target") || {}).value || 0;
-  // 進行中月份：YoY 改用「同日區間」口徑（部分月 vs 去年整月會出假負值）
+  // 進行中月份：「去年同期」與 YoY 一律用「同日區間（1~昨日）」口徑，
+  // 三個數字同口徑才對得上；沒有同日區間基期時 YoY 顯示「—」而非退回整月假負值
   const isRunning = label === runningMonth;
-  const yoy =
-    isRunning && runningYoY != null
+  const lastYear =
+    isRunning && runningLastYear != null ? runningLastYear : lastYearFull;
+  const yoy = isRunning
+    ? runningYoY != null
       ? runningYoY.toFixed(1)
-      : lastYear > 0
-      ? (((actual - lastYear) / lastYear) * 100).toFixed(1)
-      : "0.0";
+      : null
+    : lastYear > 0
+    ? (((actual - lastYear) / lastYear) * 100).toFixed(1)
+    : "0.0";
   const achieve = target > 0 ? ((actual / target) * 100).toFixed(1) : "0.0";
-  const yoyPositive = Number(yoy) >= 0;
+  const yoyPositive = yoy != null && Number(yoy) >= 0;
   return (
     <div className="tooltip-card">
       <div className="tooltip-month">
@@ -1740,14 +1820,21 @@ function TooltipCard({ active, payload, label, runningMonth, runningYoY }) {
             className="tooltip-label-dot"
             style={{ background: "#6B7280" }}
           />
-          <span className="tooltip-label sec">去年同期</span>
+          <span className="tooltip-label sec">
+            {isRunning ? `去年同期（1-${runningDays}）` : "去年同期"}
+          </span>
           <span className="tooltip-val mono sec">{num(lastYear)}</span>
         </div>
+        {isRunning && lastYearFull > 0 && (
+          <div className="tooltip-row">
+            <span className="tooltip-label sec">去年整月</span>
+            <span className="tooltip-val mono sec">{num(lastYearFull)}</span>
+          </div>
+        )}
         <div className="tooltip-yoy-box">
           <span>{isRunning ? "同期 YoY" : "YoY"}</span>
-          <strong className={yoyPositive ? "yoy-pos" : "yoy-neg"}>
-            {yoyPositive ? "+" : ""}
-            {yoy}%
+          <strong className={yoy == null ? "" : yoyPositive ? "yoy-pos" : "yoy-neg"}>
+            {yoy == null ? "—" : `${yoyPositive ? "+" : ""}${yoy}%`}
           </strong>
         </div>
         {target > 0 && (
@@ -1875,6 +1962,9 @@ function Dashboard() {
   // bot 最後餵數時間（文件 feedAt 欄位）；freshTick 每 5 分鐘重算新鮮度顯示
   const [feedAt, setFeedAt] = useState(null);
   const [feedAtShopee, setFeedAtShopee] = useState(null);
+  // 腳本實際回報的資料迄日（YYYY-MM-DD），讓「數據至 M/D」字面為真
+  const [feedDataTo, setFeedDataTo] = useState(null);
+  const [feedDataToShopee, setFeedDataToShopee] = useState(null);
   const [, setFreshTick] = useState(0);
   // 手改自動欄位的一次性提醒（按過「知道了」後本次工作階段不再出現）
   const [autoEditNoticeState, setAutoEditNoticeState] = useState(false);
@@ -2220,9 +2310,9 @@ function Dashboard() {
   };
 
   const removeAdChannel = (key) => {
-    if (key === "google" || key === "fb") {
+    if (AUTO_AD_KEYS.includes(key)) {
       window.alert(
-        "Google／Meta 廣告費由自動餵數維護，無法刪除——金額每日 07:31 自動更新，" +
+        "Google／Meta／蝦皮廣告費由自動餵數維護，無法刪除——每日凌晨寫入、07:31 回刷，" +
           "刪除後仍會被寫回，反而變成看不見的隱形花費。"
       );
       return;
@@ -2306,6 +2396,8 @@ function Dashboard() {
           // bot 新鮮度：無論後續是否套用資料，都先更新餵數時間
           if (remote.feedAt) setFeedAt(remote.feedAt);
           if (remote.feedAtShopee) setFeedAtShopee(remote.feedAtShopee);
+          if (remote.feedDataTo) setFeedDataTo(remote.feedDataTo);
+          if (remote.feedDataToShopee) setFeedDataToShopee(remote.feedDataToShopee);
           const isOwnEcho = remote.updatedBy === clientIdRef.current;
           if (hydratedRef.current && isOwnEcho) {
             setSyncState("synced");
@@ -2418,6 +2510,8 @@ function Dashboard() {
             // 否則匯入還原後新鮮度徽章會誤報「無紀錄」直到次日 07:31
             ...(feedAt ? { feedAt } : {}),
             ...(feedAtShopee ? { feedAtShopee } : {}),
+            ...(feedDataTo ? { feedDataTo } : {}),
+            ...(feedDataToShopee ? { feedDataToShopee } : {}),
           });
           fullWriteRef.current = false;
           docExistsRef.current = true;
@@ -2747,23 +2841,44 @@ function Dashboard() {
   const ytdYoY = ytdLastYear ? ((ytd - ytdLastYear) / ytdLastYear) * 100 : 0;
 
   // 本月預估落點（進行中月份）：本月至昨日實績 ÷ 去年同日區間佔全月比重（季節加權），
-  // 去年無日資料時退回線性推算——月底「需日均」達不到時，老闆真正要的是這個數字
+  // 去年無日資料時退回線性推算——月底「需日均」達不到時，老闆真正要的是這個數字。
+  // 最小樣本門檻 5 天：月初 1~4 天的去年單日佔比雜訊太大（週末/檔期首日可差 ±50%），
+  // 不能讓一個 1 天樣本的整月預估被複製進 LINE
+  const MONTH_PROJECTION_MIN_DAYS = 5;
   const monthProjection = (() => {
-    if (!_isRunningMonth(activeMonth) || runningElapsed === 0 || !currentRevenue)
+    if (
+      !_isRunningMonth(activeMonth) ||
+      runningElapsed < MONTH_PROJECTION_MIN_DAYS ||
+      !currentRevenue
+    )
       return null;
     const sp = lastYearSamePeriodOfRunning();
     const fullLY = currentChart.lastYear || 0;
-    if (sp > 0 && fullLY > 0) return Math.round(currentRevenue / (sp / fullLY));
+    // 去年同期佔比 <5% 屬病態基期（去年頭幾天近零），退回線性推算避免爆值
+    if (sp > 0 && fullLY > 0 && sp / fullLY >= 0.05)
+      return Math.round(currentRevenue / (sp / fullLY));
     return Math.round((currentRevenue / runningElapsed) * daysInMonth);
   })();
+  // 目前日均（至昨日）：讓「需日均」有對照，一眼看出可不可及
+  const currentDailyAvg =
+    _isRunningMonth(activeMonth) && runningElapsed > 0
+      ? Math.round(currentRevenue / runningElapsed)
+      : null;
 
-  // 趨勢圖 tooltip 用：進行中月份的同日區間 YoY（部分月比去年整月會出假負值）
-  const runningTrendYoY = (() => {
-    if (!runningMonthTab) return null;
-    const item = chartData.find((i) => i.month === runningMonthTab);
-    const sp = lastYearSamePeriodOfRunning();
-    if (!item || sp <= 0) return null;
-    return ((item.actual - sp) / sp) * 100;
+  // 趨勢圖 tooltip 用：進行中月份的同日區間（去年 1~昨日）金額與 YoY，
+  // 依 trendChannel 口徑（全通路或單一通路）計算——實績/去年/YoY 三個數字必須同口徑
+  const runningTrendCompare = (() => {
+    if (!runningMonthTab || runningElapsed === 0) return null;
+    const chKey = trendChannel === "all" ? undefined : trendChannel;
+    const prevYearKey = String(Number(activeYear) - 1);
+    const prevState = allYears[prevYearKey]?.[runningMonthTab];
+    if (!prevState || !monthHasData(prevState)) return null;
+    const prevDim = getDaysInMonth(prevYearKey, runningMonthTab);
+    const sp = sumMonthRange(prevState, 1, Math.min(runningElapsed, prevDim), chKey);
+    const curState = allYears[activeYear]?.[runningMonthTab];
+    const actual = curState ? sumMonthRange(curState, 1, runningElapsed, chKey) : 0;
+    if (sp <= 0) return { lastYearSamePeriod: 0, yoy: null };
+    return { lastYearSamePeriod: sp, yoy: ((actual - sp) / sp) * 100 };
   })();
 
   // 當月 YoY：進行中月份比「去年同日區間（至昨日）」——與年度同期口徑一致，
@@ -2778,8 +2893,14 @@ function Dashboard() {
   // 同期目標（僅已有實績月份的目標加總）→ 用來判斷 AHEAD / ON TRACK / BEHIND
   // 同期目標：過去月份計整月、進行中月份依時間進度折算——
   // 避免月初就被整月目標拖成 BEHIND 的假警報
+  // 進行中月份的同期目標：優先用「去年同日區間 ×(1+成長率)」（季節加權），
+  // 與年增、預估落點同一基期；去年無日資料才退回線性折算——否則前淡後旺的月份
+  // 線性目標會高估，老闆明明追上去年同期、摘要第一行卻寫「落後」
   const ytdTarget = monthsWithActual.reduce((s, i) => {
     if (!_isRunningMonth(i.month)) return s + (i.target || 0);
+    const sp = lastYearSamePeriodOfRunning();
+    if (sp > 0)
+      return s + Math.round(sp * (1 + (Number(targetGrowthRate) || 0) / 100));
     return s + Math.round((i.target || 0) * runningFrac);
   }, 0);
   const paceRate = ytdTarget ? (ytd / ytdTarget) * 100 : 0;
@@ -2900,7 +3021,8 @@ function Dashboard() {
       hasTarget,
       remaining,
       needDaily,
-      timePct: (d / daysInMonth) * 100,
+      // 已過時間＝今天-1（資料只到昨天；今天歸剩餘側，與 remaining/runningFrac 同口徑）
+      timePct: ((d - 1) / daysInMonth) * 100,
     };
   }, [activeYear, activeMonth, daysInMonth, currentTarget, currentRevenue]);
 
@@ -2946,7 +3068,7 @@ function Dashboard() {
               ? paceInfo.needDaily > 0
                 ? `，剩 ${paceInfo.remaining} 天需日均 ${money(
                     paceInfo.needDaily
-                  )}`
+                  )}${currentDailyAvg ? `（目前日均 ${money(currentDailyAvg)}）` : ""}`
                 : "，本月已達標"
               : ""
           }。`,
@@ -2956,12 +3078,15 @@ function Dashboard() {
     // 防線：全通路已自動餵數，唯一風險是排程沒跑（數字停在更早的日子）——
     // 餵數逾時就先確認再複製，避免低報數字直接進 LINE
     const warns = [];
+    const fr = feedFreshness(feedAt, feedAtShopee, feedDataTo, feedDataToShopee);
+    if (fr?.stale) warns.push(`${fr.which} 餵數已中斷 ${Math.floor(fr.hours)} 小時`);
+    else if (fr?.lagging)
+      warns.push(`數據只到 ${fr.label}，今晨尚未補數——摘要會少一天`);
     [
       ["網店/POS", feedAt],
       ["蝦皮", feedAtShopee],
     ].forEach(([name, ts]) => {
-      if (ts && Date.now() - new Date(ts).getTime() > 26 * 3600000)
-        warns.push(`${name} 餵數已超過 26 小時未更新`);
+      if (!ts) warns.push(`${name} 餵數無紀錄`);
     });
     if (
       warns.length &&
@@ -3356,6 +3481,19 @@ function Dashboard() {
   // 跳到「昨日」那一列（快速查看最新一天的各通路數字，全通路已自動餵數）。
   // 用真正的昨日日期推月份與年度：每月 1 日會正確跳到上個月最後一天
   //（4/1 連會計年度都會正確切到前一年度的 3 月）
+  // 切到「上一會計月」（4月→前一年度 3月），月初回看收官用——不借用「昨日」推算，
+  // 2、3 號昨日仍在本月會跳不出去
+  const jumpToPrevMonth = () => {
+    const idx = MONTH_TABS.indexOf(activeMonth);
+    if (idx <= 0) {
+      setActiveYear(String(Number(activeYear) - 1));
+      setActiveMonth(MONTH_TABS[MONTH_TABS.length - 1]);
+    } else {
+      setActiveMonth(MONTH_TABS[idx - 1]);
+    }
+    setTimeout(() => window.scrollTo({ top: 0, behavior: "smooth" }), 50);
+  };
+
   const jumpToYesterday = () => {
     const t = new Date();
     const y = new Date(t.getFullYear(), t.getMonth(), t.getDate() - 1);
@@ -3994,11 +4132,6 @@ function Dashboard() {
           flex-wrap: wrap;
           margin-bottom: 8px;
         }
-        .header-sync-row {
-          margin-bottom: 6px;
-          display: flex;
-          justify-content: flex-end;
-        }
 
         .work-grid { display: grid; grid-template-columns: 310px minmax(0,1fr); gap: 20px; padding: 22px; }
 
@@ -4291,8 +4424,10 @@ function Dashboard() {
           font-size: 10px;
           font-weight: 700;
           letter-spacing: .05em;
-          color: var(--gold);
-          border: 1px dashed var(--gold-dim);
+          /* tooltip 容器兩主題固定深底：不能用會隨主題翻黑的 --gold token，
+             寫死淺藍（#60A5FA 在 #1A2840 上 5.7:1） */
+          color: #60A5FA;
+          border: 1px dashed rgba(96,165,250,.55);
           border-radius: 5px;
           padding: 1px 6px;
           vertical-align: 3px;
@@ -4441,7 +4576,6 @@ function Dashboard() {
           .topbar-right { justify-content: flex-start; }
           .big-header-right { text-align: left; min-width: 0; }
           .header-actions { justify-content: flex-start; }
-          .header-sync-row { justify-content: flex-start; }
         }
         @media (max-width: 980px) { .exec-side { grid-template-columns: 1fr; } }
         @media (max-width: 900px) {
@@ -4607,7 +4741,12 @@ function Dashboard() {
                   {theme === "dark" ? "Dark" : "Light"}
                 </span>
               </button>
-              <FeedBadge feedAt={feedAt} feedAtShopee={feedAtShopee} />
+              <FeedBadge
+                feedAt={feedAt}
+                feedAtShopee={feedAtShopee}
+                feedDataTo={feedDataTo}
+                feedDataToShopee={feedDataToShopee}
+              />
               <SyncBadge
                 syncState={syncState}
                 lastSyncedAt={lastSyncedAt}
@@ -4650,19 +4789,21 @@ function Dashboard() {
             </div>
           </div>
 
-          {/* 月初捷徑：新月份還沒有數據時，一鍵回看上月收官（重用「看昨日」的跨月邏輯） */}
-          {_today.getDate() <= 3 &&
-            _isRunningMonth(activeMonth) &&
-            currentRevenue === 0 && (
-              <div className="month-start-hint">
-                <span>
-                  {activeMonth}剛開始，自動餵數今晚會補入第一天——先回顧上個月的收官數字？
-                </span>
-                <button type="button" className="btn-add" onClick={jumpToYesterday}>
-                  回看上月收官
-                </button>
-              </div>
-            )}
+          {/* 月初捷徑（1-3 日一律顯示）：直接切到上一會計月看收官；文案依日期與餵數狀態分流 */}
+          {_today.getDate() <= 3 && _isRunningMonth(activeMonth) && (
+            <div className="month-start-hint">
+              <span>
+                {_today.getDate() === 1
+                  ? `${activeMonth}剛開始，今晚 00:30 自動餵數會補入第一天——先回顧上個月的收官？`
+                  : currentRevenue === 0
+                  ? `${activeMonth} 第一天的數據應已在 00:30 入帳，目前仍是空的——請先看右上餵數徽章。上月收官在這 →`
+                  : `${activeMonth}才開始幾天——月初回報用上月收官數字 →`}
+              </span>
+              <button type="button" className="btn-add" onClick={jumpToPrevMonth}>
+                回看上月收官
+              </button>
+            </div>
+          )}
 
           {/* ── KPI CARDS ── */}
           <section className="grid-3">
@@ -4682,12 +4823,20 @@ function Dashboard() {
             />
             <KPICard
               title={`${activeMonth} 當月營收`}
-              helper="REALTIME"
+              helper={
+                _isRunningMonth(activeMonth)
+                  ? "至昨日 · DAILY FEED"
+                  : paceInfo.status === "past"
+                  ? "整月收官 · CLOSED"
+                  : "尚未開始"
+              }
               value={money(currentRevenue)}
               delta={
                 currentRevenue > 0
-                  ? `${yoy >= 0 ? "+" : ""}${yoy.toFixed(1)}% YoY`
-                  : "本月尚未輸入"
+                  ? `${yoy >= 0 ? "+" : ""}${yoy.toFixed(1)}% ${
+                      _isRunningMonth(activeMonth) ? "同期 YoY" : "YoY"
+                    }`
+                  : "等待自動餵數"
               }
               tone={yoy > 0 ? "green" : yoy < 0 ? "red" : "gray"}
               icon={TrendingUp}
@@ -4701,7 +4850,7 @@ function Dashboard() {
               delta={
                 currentRevenue > 0
                   ? `本月 ${achieveRate.toFixed(1)}%`
-                  : "待更新"
+                  : "本月等待餵數"
               }
               tone="gray"
               icon={Target}
@@ -4739,7 +4888,7 @@ function Dashboard() {
                     </div>
                     <div className="chip">
                       <Eye size={13} />
-                      {trendChannel === "all" ? "LIVE" : labelOf(trendChannel)}
+                      {trendChannel === "all" ? "全通路" : labelOf(trendChannel)}
                     </div>
                   </div>
                 }
@@ -4792,7 +4941,11 @@ function Dashboard() {
                           content={
                             <TooltipCard
                               runningMonth={runningMonthTab}
-                              runningYoY={runningTrendYoY}
+                              runningYoY={runningTrendCompare?.yoy ?? null}
+                              runningLastYear={
+                                runningTrendCompare?.lastYearSamePeriod ?? null
+                              }
+                              runningDays={runningElapsed}
                             />
                           }
                           cursor={{ fill: tc.goldGlow }}
@@ -4837,7 +4990,9 @@ function Dashboard() {
                                 key={entry.month}
                                 // 進行中月份：半透明＋虛線框＝「這根還沒長完」，
                                 // 避免月中被誤讀成衰退
-                                fillOpacity={isRun ? 0.45 : isAct ? 1 : 0.55}
+                                // 進行中且正在檢視（每天開頁的預設）：保留較高不透明度＋虛線框；
+                                // 進行中但沒在看：降到 0.45 當背景
+                                fillOpacity={isRun ? (isAct ? 0.8 : 0.45) : isAct ? 1 : 0.55}
                                 stroke={isRun || isAct ? tc.gold : "none"}
                                 strokeWidth={isAct ? 1.5 : isRun ? 1.2 : 0}
                                 strokeDasharray={isRun ? "4 3" : undefined}
@@ -4872,20 +5027,11 @@ function Dashboard() {
                       {!paceInfo.hasTarget
                         ? "去年同月無資料，無法推算目標"
                         : paceInfo.status === "current"
-                        ? `${
-                            paceInfo.needDaily <= 0
-                              ? `已超越月目標 · 剩 ${paceInfo.remaining} 天`
-                              : `剩 ${paceInfo.remaining} 天需日均 · 時間 ${paceInfo.timePct.toFixed(
-                                  0
-                                )}% vs 達成 ${achieveRate.toFixed(0)}%`
-                          }${
-                            monthProjection && currentTarget > 0
-                              ? ` ｜預估收 ${money(monthProjection)}（~${(
-                                  (monthProjection / currentTarget) *
-                                  100
-                                ).toFixed(0)}%）`
-                              : ""
-                          }`
+                        ? paceInfo.needDaily <= 0
+                          ? `已超越月目標 · 剩 ${paceInfo.remaining} 天`
+                          : `剩 ${paceInfo.remaining} 天需日均${
+                              currentDailyAvg ? `（目前日均 ${money(currentDailyAvg)}）` : ""
+                            } · 時間 ${paceInfo.timePct.toFixed(0)}% vs 達成 ${achieveRate.toFixed(0)}%`
                         : paceInfo.status === "past"
                         ? `當月達成 ${achieveRate.toFixed(1)}%`
                         : `月目標 ${money(currentTarget)}`}
@@ -4898,25 +5044,59 @@ function Dashboard() {
                     </div>
                     <div className="stat-value">
                       {currentRevenue === 0
-                        ? "待輸入"
+                        ? "待餵數"
+                        : _isRunningMonth(activeMonth) &&
+                          runningElapsed < MONTH_PROJECTION_MIN_DAYS
+                        ? "樣本不足"
                         : yoy < -20
                         ? "⚠ 需注意"
                         : "✓ 正常"}
                     </div>
                     <div className="stat-note">
                       {currentRevenue === 0
-                        ? "尚未形成比較"
-                        : `YoY ${yoy.toFixed(1)}%`}
+                        ? "尚無本月資料"
+                        : _isRunningMonth(activeMonth) &&
+                          runningElapsed < MONTH_PROJECTION_MIN_DAYS
+                        ? `同期 YoY ${yoy.toFixed(1)}% · 滿 ${MONTH_PROJECTION_MIN_DAYS} 天再判讀`
+                        : `${_isRunningMonth(activeMonth) ? "同期 " : ""}YoY ${yoy.toFixed(1)}%`}
                     </div>
                   </div>
-                  <div className="stat-soft accent-blue">
-                    <div className="stat-label">
-                      <Target size={14} />
-                      目標進度
+                  {monthProjection && currentTarget > 0 ? (
+                    // 進行中月份（滿 5 天樣本）：這格改成老闆月底最想看的「預估落點」，
+                    // 達成率 KPI 卡已經有、不重複
+                    <div className="stat-soft accent-blue">
+                      <div className="stat-label">
+                        <Target size={14} />
+                        本月預估落點
+                      </div>
+                      <div
+                        className="stat-value"
+                        style={
+                          monthProjection >= currentTarget
+                            ? { color: "var(--green)" }
+                            : {}
+                        }
+                      >
+                        {money(monthProjection)}
+                      </div>
+                      <div className="stat-note">
+                        {`~${((monthProjection / currentTarget) * 100).toFixed(0)}% · 依去年同日佔比推算`}
+                      </div>
                     </div>
-                    <div className="stat-value">{achieveRate.toFixed(1)}%</div>
-                    <div className="stat-note">本月達成率</div>
-                  </div>
+                  ) : (
+                    <div className="stat-soft accent-blue">
+                      <div className="stat-label">
+                        <Target size={14} />
+                        目標進度
+                      </div>
+                      <div className="stat-value">{achieveRate.toFixed(1)}%</div>
+                      <div className="stat-note">
+                        {_isRunningMonth(activeMonth) && runningElapsed > 0 && runningElapsed < MONTH_PROJECTION_MIN_DAYS
+                          ? `本月達成率 · 預估落點滿 ${MONTH_PROJECTION_MIN_DAYS} 天後提供`
+                          : "本月達成率"}
+                      </div>
+                    </div>
+                  )}
                   <div className="stat-soft accent-slate">
                     <div className="stat-label">
                       <Target size={14} />
@@ -5113,7 +5293,7 @@ function Dashboard() {
                   {deferredDonutData.length === 0 ? (
                     <div className="pie-empty">
                       本月尚無營收資料
-                      <span>全通路由自動餵數每日 07:31 補入昨日資料</span>
+                      <span>網店/POS/蝦皮由自動餵數每日凌晨寫入昨日資料</span>
                     </div>
                   ) : (
                   <ResponsiveContainer width="100%" height="100%">
@@ -5145,8 +5325,8 @@ function Dashboard() {
                 <div className="rank-list">
                   {donutData.length === 0 && (
                     <div className="rank-empty">
-                      本月還沒有任何通路營收——網店/POS/蝦皮與廣告費皆由自動餵數
-                      每日 07:31 寫入昨日資料，這裡會即時排出通路占比。
+                      本月還沒有任何通路營收——網店/POS/蝦皮與廣告費由自動餵數
+                      每日凌晨寫入昨日資料（07:31 再回刷校正），這裡會即時排出通路占比。
                     </div>
                   )}
                   {donutData.map((item, i) => (
@@ -5219,15 +5399,19 @@ function Dashboard() {
                   >
                     {roasFmt(roasStats.web)}
                   </div>
-                  <div className="roas-note">
-                    網店 ÷ (Google+Meta) · 基準 {ROAS_BENCHMARKS.web}x
+                  <div
+                    className="roas-note"
+                    title={`基準 ${ROAS_BENCHMARKS.web}x＝Google Ads 帳戶歷史基準（外部基準）`}
+                    aria-label={`網店 ROAS 基準 ${ROAS_BENCHMARKS.web} 倍，來源為 Google Ads 帳戶歷史基準`}
+                  >
+                    網店 ÷ (Google+Meta) · 基準 {ROAS_BENCHMARKS.web}x（帳戶基準）
                   </div>
                 </div>
                 <div className="roas-box">
                   <div className="roas-label">蝦皮 ROAS</div>
                   <div
                     className={`roas-value ${
-                      !roasStats.shopee
+                      roasStats.shopee === null
                         ? ""
                         : roasStats.shopee >= ROAS_BENCHMARKS.shopee
                         ? "good"
@@ -5236,8 +5420,12 @@ function Dashboard() {
                   >
                     {roasFmt(roasStats.shopee)}
                   </div>
-                  <div className="roas-note">
-                    蝦皮營收 ÷ 蝦皮廣告 · 基準 {ROAS_BENCHMARKS.shopee}x
+                  <div
+                    className="roas-note"
+                    title={`基準 ${ROAS_BENCHMARKS.shopee}x＝自家 2026 年 4–8 月蝦皮 ROAS 中位數（4.0／11.1／13.2／11.1／17.5，2026-08-27 設定）；達標＝贏過自己的常態，不是市場基準`}
+                    aria-label={`蝦皮 ROAS 基準 ${ROAS_BENCHMARKS.shopee} 倍，來源為自家 2026 年 4 到 8 月中位數`}
+                  >
+                    蝦皮營收 ÷ 蝦皮廣告 · 基準 {ROAS_BENCHMARKS.shopee}x（自家中位）
                   </div>
                 </div>
                 <div className="roas-box">
@@ -5704,7 +5892,7 @@ function Dashboard() {
                     <AlertTriangle size={14} />
                     <span>
                       網店／POS／蝦皮／Google／Meta 由自動餵數維護：手動修改的值會在
-                      次日 07:31 被校正回 API 真值。全部通路與廣告費皆已自動化，無需手動輸入。
+                      次日凌晨被校正回 API 真值。MOMO／其他通路仍需手動維護。
                     </span>
                     <button type="button" onClick={() => setAutoEditNotice(false)}>
                       知道了
@@ -5778,8 +5966,10 @@ function Dashboard() {
                 <div className="range-bar">
                   {[
                     { label: "全月", s: 1, e: 31 },
-                    ...(_isRunningMonth(activeMonth)
-                      ? [{ label: `1-${_today.getDate()}`, s: 1, e: _today.getDate() }]
+                    // 「1-昨日」：資料只到昨天，區間對照（去年同期/上月同區間）才會與
+                    // KPI 的同日區間口徑一致；每月 1 日沒有昨日、不顯示
+                    ...(_isRunningMonth(activeMonth) && runningElapsed > 0
+                      ? [{ label: `1-${runningElapsed}`, s: 1, e: runningElapsed }]
                       : []),
                   ].map((p) => {
                     const pEnd = Math.min(p.e, daysInMonth);
@@ -5928,7 +6118,7 @@ function Dashboard() {
                               {(ch.key === "web" || ch.key === "pos") && (
                                 <span
                                   className="auto-chip"
-                                  title="由自動餵數維護（每日 07:31 寫入昨日），手動修改會在次日被校正"
+                                  title="由自動餵數維護（每日凌晨寫入昨日、07:31 回刷），手動修改會在次日被校正"
                                 >
                                   自動
                                 </span>
