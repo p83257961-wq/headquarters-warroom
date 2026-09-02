@@ -5061,9 +5061,6 @@ function Dashboard() {
                     <div className="stat-value">
                       {currentRevenue === 0
                         ? "待餵數"
-                        : _isRunningMonth(activeMonth) &&
-                          runningElapsed < MONTH_PROJECTION_MIN_DAYS
-                        ? "觀察中"
                         : yoy < -20
                         ? "⚠ 需注意"
                         : "✓ 正常"}
@@ -5071,10 +5068,9 @@ function Dashboard() {
                     <div className="stat-note">
                       {currentRevenue === 0
                         ? "尚無本月資料"
-                        : _isRunningMonth(activeMonth) &&
-                          runningElapsed < MONTH_PROJECTION_MIN_DAYS
-                        ? `同期 YoY ${yoy >= 0 ? "+" : ""}${yoy.toFixed(1)}%（${runningElapsed} 天樣本，滿 ${MONTH_PROJECTION_MIN_DAYS} 天判讀）`
-                        : `${_isRunningMonth(activeMonth) ? "同期 " : ""}YoY ${yoy.toFixed(1)}%`}
+                        : `${_isRunningMonth(activeMonth) ? "同期 " : ""}YoY ${
+                            yoy >= 0 ? "+" : ""
+                          }${yoy.toFixed(1)}%`}
                     </div>
                   </div>
                   {monthProjection && currentTarget > 0 ? (
