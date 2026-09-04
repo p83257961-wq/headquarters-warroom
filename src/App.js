@@ -2802,8 +2802,6 @@ function Dashboard() {
   const runningHasActual =
     !!runningMonthTab &&
     monthsWithActual.some((i) => i.month === runningMonthTab);
-  // 資料口徑到「昨天」：bot 每日 07:31 寫昨日、蝦皮手 key 也是隔日補——
-  // 已過天數＝今天-1、「今天」歸剩餘側，與達標配速卡（remaining 含今天）口徑一致
   // 「已過天數」以實際資料為準：bot 只餵到昨天，但老闆會在日中手 key 今天的進度——
   // 今天那列有數字就把今天算進去（純 bot 日子自然落在昨天），
   // 讓區間快選、同期 YoY、配速、摘要天數都跟畫面上的金額同一口徑
@@ -3143,14 +3141,44 @@ function Dashboard() {
     return { ...base, total: currentChannels.reduce((s, k) => s + base[k], 0) };
   }, [monthData.rows, currentChannels, effRangeStart, effRangeEnd]);
 
+  // 區間快選「1-本日」是日曆口徑（老闆要的是「1 號到今天」），但今天多半還沒有資料
+  // （bot 次日凌晨才寫昨日、老闆日中才手 key 今天）——比較基準若照選取區間取去年同期，
+  // 會多算沒資料的那幾天、YoY 天天假性偏低。故對照窗口砍到「有資料的最後一天」，
+  // 並在 chip 上標出實際比到哪一天，數字與字面永遠一致。
+  const compareEnd = _isRunningMonth(activeMonth)
+    ? Math.min(effRangeEnd, runningElapsed)
+    : effRangeEnd;
+  const compareTrimmed = compareEnd >= effRangeStart && compareEnd < effRangeEnd;
+  const compareLabel = compareTrimmed ? `(${effRangeStart}-${compareEnd}日)` : "";
+
+  // 對照用的本月合計：與 compareEnd 同窗口（今天無資料時與 rangeTotals 相同，
+  // 但老闆手 key 到一半的日子不會拿半天去比去年整天以外的天數）
+  const rangeCompareTotal = useMemo(() => {
+    if (compareEnd < effRangeStart) return 0;
+    return monthData.rows
+      .filter((r) => r.day >= effRangeStart && r.day <= compareEnd)
+      .reduce(
+        (s, r) => s + currentChannels.reduce((a, k) => a + n(r[k]), 0),
+        0
+      );
+  }, [monthData.rows, currentChannels, effRangeStart, compareEnd]);
+
   const rangeStats = useMemo(() => {
+    if (compareEnd < effRangeStart) {
+      const i0 = MONTH_TABS.indexOf(activeMonth);
+      return {
+        lastYear: 0,
+        prevMonth: 0,
+        prevMonthTab: i0 === 0 ? MONTH_TABS[11] : MONTH_TABS[i0 - 1],
+      };
+    }
     const prevYearKey = String(Number(activeYear) - 1);
     const lastYearState = allYears[prevYearKey]?.[activeMonth];
     const lastYear = lastYearState
       ? sumMonthRange(
           lastYearState,
           effRangeStart,
-          Math.min(effRangeEnd, getDaysInMonth(prevYearKey, activeMonth))
+          Math.min(compareEnd, getDaysInMonth(prevYearKey, activeMonth))
         )
       : 0;
     const idx = MONTH_TABS.indexOf(activeMonth);
@@ -3162,19 +3190,19 @@ function Dashboard() {
       ? sumMonthRange(
           prevMonthState,
           effRangeStart,
-          Math.min(effRangeEnd, getDaysInMonth(prevMonthYear, prevMonthTab))
+          Math.min(compareEnd, getDaysInMonth(prevMonthYear, prevMonthTab))
         )
       : 0;
     return { lastYear, prevMonth, prevMonthTab };
-  }, [allYears, activeYear, activeMonth, effRangeStart, effRangeEnd]);
+  }, [allYears, activeYear, activeMonth, effRangeStart, compareEnd]);
 
   const rangeYoY =
     rangeStats.lastYear > 0
-      ? ((rangeTotals.total - rangeStats.lastYear) / rangeStats.lastYear) * 100
+      ? ((rangeCompareTotal - rangeStats.lastYear) / rangeStats.lastYear) * 100
       : null;
   const rangeMoM =
     rangeStats.prevMonth > 0
-      ? ((rangeTotals.total - rangeStats.prevMonth) / rangeStats.prevMonth) *
+      ? ((rangeCompareTotal - rangeStats.prevMonth) / rangeStats.prevMonth) *
         100
       : null;
 
@@ -5973,16 +6001,25 @@ function Dashboard() {
                   </div>
                 </div>
 
-                {/* 日期區間：快選（全月＋進行中月份的「1-今日」）＋自訂起迄，
+                {/* 日期區間：快選（全月＋進行中月份的「1-本日」）＋自訂起迄，
                     右側即時比對去年同期與上月同區間（旬快選 2026-08-27 老闆拍板移除） */}
                 <div className="range-bar">
                   {[
                     { label: "全月", s: 1, e: 31 },
-                    // 「1-N」＝到已有資料的最後一天（今天有手 key 進度就含今天，
-                    // 否則到昨天）：區間對照才會與 KPI 的同日區間口徑一致；
-                    // 每月 1 日沒有資料時不顯示
-                    ...(_isRunningMonth(activeMonth) && runningElapsed > 0
-                      ? [{ label: `1-${runningElapsed}`, s: 1, e: runningElapsed }]
+                    // 「1-本日」＝日曆上的今天（老闆 2026-08-27／09-04 兩次指定：
+                    // 「1 號到本日」）。今天尚無資料時金額與 1-昨日相同，但按鈕字面
+                    // 必須跟日曆一致——綁「有資料的最後一天」會在 9/4 顯示 1-3 讓人以為壞了。
+                    // 對照基準（去年同期／上月同區間）另用 compareEnd 砍到有資料那天。
+                    // 月底最後一天與「全月」同範圍，不重複出一顆（避免兩顆同時亮）
+                    ...(_isRunningMonth(activeMonth) &&
+                    _today.getDate() < daysInMonth
+                      ? [
+                          {
+                            label: `1-${_today.getDate()}`,
+                            s: 1,
+                            e: _today.getDate(),
+                          },
+                        ]
                       : []),
                   ].map((p) => {
                     const pEnd = Math.min(p.e, daysInMonth);
@@ -6045,8 +6082,16 @@ function Dashboard() {
                       {effRangeStart}–{effRangeEnd}日 合計{" "}
                       <strong>{money(rangeTotals.total)}</strong>
                     </div>
-                    <div className="range-chip">
-                      去年同期 <strong>{money(rangeStats.lastYear)}</strong>
+                    <div
+                      className="range-chip"
+                      title={
+                        compareTrimmed
+                          ? `本月 ${compareEnd + 1}日 起尚無資料，去年同期只比到 ${compareEnd} 日，避免多算天數壓低年增`
+                          : undefined
+                      }
+                    >
+                      去年同期{compareLabel}{" "}
+                      <strong>{money(rangeStats.lastYear)}</strong>
                       {rangeYoY !== null ? (
                         <span className={rangeYoY >= 0 ? "up" : "down"}>
                           {rangeYoY >= 0 ? "+" : ""}
@@ -6056,8 +6101,15 @@ function Dashboard() {
                         <span>—</span>
                       )}
                     </div>
-                    <div className="range-chip">
-                      上月({rangeStats.prevMonthTab})同區間{" "}
+                    <div
+                      className="range-chip"
+                      title={
+                        compareTrimmed
+                          ? `本月 ${compareEnd + 1}日 起尚無資料，上月同區間只比到 ${compareEnd} 日`
+                          : undefined
+                      }
+                    >
+                      上月({rangeStats.prevMonthTab})同區間{compareLabel}{" "}
                       <strong>{money(rangeStats.prevMonth)}</strong>
                       {rangeMoM !== null ? (
                         <span className={rangeMoM >= 0 ? "up" : "down"}>
