@@ -3141,44 +3141,22 @@ function Dashboard() {
     return { ...base, total: currentChannels.reduce((s, k) => s + base[k], 0) };
   }, [monthData.rows, currentChannels, effRangeStart, effRangeEnd]);
 
-  // 區間快選「1-本日」是日曆口徑（老闆要的是「1 號到今天」），但今天多半還沒有資料
-  // （bot 次日凌晨才寫昨日、老闆日中才手 key 今天）——比較基準若照選取區間取去年同期，
-  // 會多算沒資料的那幾天、YoY 天天假性偏低。故對照窗口砍到「有資料的最後一天」，
-  // 並在 chip 上標出實際比到哪一天，數字與字面永遠一致。
-  const compareEnd = _isRunningMonth(activeMonth)
-    ? Math.min(effRangeEnd, runningElapsed)
-    : effRangeEnd;
-  const compareTrimmed = compareEnd >= effRangeStart && compareEnd < effRangeEnd;
-  const compareLabel = compareTrimmed ? `(${effRangeStart}-${compareEnd}日)` : "";
-
-  // 對照用的本月合計：與 compareEnd 同窗口（今天無資料時與 rangeTotals 相同，
-  // 但老闆手 key 到一半的日子不會拿半天去比去年整天以外的天數）
-  const rangeCompareTotal = useMemo(() => {
-    if (compareEnd < effRangeStart) return 0;
-    return monthData.rows
-      .filter((r) => r.day >= effRangeStart && r.day <= compareEnd)
-      .reduce(
-        (s, r) => s + currentChannels.reduce((a, k) => a + n(r[k]), 0),
-        0
-      );
-  }, [monthData.rows, currentChannels, effRangeStart, compareEnd]);
+  // 區間比較一律照「選取的區間」算：選 1-15 就比去年 1-15。
+  // ⚠ 2026-09-04 教訓：曾把對照窗口自動砍到「有資料的最後一天」，結果選 1-15 卻顯示
+  // 「去年同期(1-4日)」＝ UI 偷改老闆的選擇，看起來像卡住。數字不動手腳，
+  // 改成在進行中月份選到「還沒有資料的天數」時掛一片提醒 chip，讓偏低的年增有解釋。
+  const lastDataDay = _isRunningMonth(activeMonth) ? runningElapsed : effRangeEnd;
+  const rangeIncomplete =
+    _isRunningMonth(activeMonth) && effRangeEnd > lastDataDay;
 
   const rangeStats = useMemo(() => {
-    if (compareEnd < effRangeStart) {
-      const i0 = MONTH_TABS.indexOf(activeMonth);
-      return {
-        lastYear: 0,
-        prevMonth: 0,
-        prevMonthTab: i0 === 0 ? MONTH_TABS[11] : MONTH_TABS[i0 - 1],
-      };
-    }
     const prevYearKey = String(Number(activeYear) - 1);
     const lastYearState = allYears[prevYearKey]?.[activeMonth];
     const lastYear = lastYearState
       ? sumMonthRange(
           lastYearState,
           effRangeStart,
-          Math.min(compareEnd, getDaysInMonth(prevYearKey, activeMonth))
+          Math.min(effRangeEnd, getDaysInMonth(prevYearKey, activeMonth))
         )
       : 0;
     const idx = MONTH_TABS.indexOf(activeMonth);
@@ -3190,19 +3168,19 @@ function Dashboard() {
       ? sumMonthRange(
           prevMonthState,
           effRangeStart,
-          Math.min(compareEnd, getDaysInMonth(prevMonthYear, prevMonthTab))
+          Math.min(effRangeEnd, getDaysInMonth(prevMonthYear, prevMonthTab))
         )
       : 0;
     return { lastYear, prevMonth, prevMonthTab };
-  }, [allYears, activeYear, activeMonth, effRangeStart, compareEnd]);
+  }, [allYears, activeYear, activeMonth, effRangeStart, effRangeEnd]);
 
   const rangeYoY =
     rangeStats.lastYear > 0
-      ? ((rangeCompareTotal - rangeStats.lastYear) / rangeStats.lastYear) * 100
+      ? ((rangeTotals.total - rangeStats.lastYear) / rangeStats.lastYear) * 100
       : null;
   const rangeMoM =
     rangeStats.prevMonth > 0
-      ? ((rangeCompareTotal - rangeStats.prevMonth) / rangeStats.prevMonth) *
+      ? ((rangeTotals.total - rangeStats.prevMonth) / rangeStats.prevMonth) *
         100
       : null;
 
@@ -6009,7 +5987,7 @@ function Dashboard() {
                     // 「1-本日」＝日曆上的今天（老闆 2026-08-27／09-04 兩次指定：
                     // 「1 號到本日」）。今天尚無資料時金額與 1-昨日相同，但按鈕字面
                     // 必須跟日曆一致——綁「有資料的最後一天」會在 9/4 顯示 1-3 讓人以為壞了。
-                    // 對照基準（去年同期／上月同區間）另用 compareEnd 砍到有資料那天。
+                    // 右側對照一律照選取區間硬比，不自動砍窗口（砍了會像卡住）。
                     // 月底最後一天與「全月」同範圍，不重複出一顆（避免兩顆同時亮）
                     ...(_isRunningMonth(activeMonth) &&
                     _today.getDate() < daysInMonth
@@ -6082,16 +6060,21 @@ function Dashboard() {
                       {effRangeStart}–{effRangeEnd}日 合計{" "}
                       <strong>{money(rangeTotals.total)}</strong>
                     </div>
-                    <div
-                      className="range-chip"
-                      title={
-                        compareTrimmed
-                          ? `本月 ${compareEnd + 1}日 起尚無資料，去年同期只比到 ${compareEnd} 日，避免多算天數壓低年增`
-                          : undefined
-                      }
-                    >
-                      去年同期{compareLabel}{" "}
-                      <strong>{money(rangeStats.lastYear)}</strong>
+                    {/* 選到還沒有資料的天數時說清楚，右邊的 YoY／MoM 照選取區間硬比、
+                        不動手腳，但要讓偏低的百分比有解釋（不是資料出錯） */}
+                    {rangeIncomplete && (
+                      <div
+                        className="range-chip"
+                        title={`本月資料只到 ${lastDataDay} 日，選取區間含 ${
+                          effRangeEnd - lastDataDay
+                        } 天尚無資料；右側去年同期／上月同區間是照 ${effRangeStart}–${effRangeEnd}日 完整比對，故年增偏低屬正常`}
+                      >
+                        ⚠ 本月資料至 {lastDataDay} 日（區間含{" "}
+                        {effRangeEnd - lastDataDay} 天未發生）
+                      </div>
+                    )}
+                    <div className="range-chip">
+                      去年同期 <strong>{money(rangeStats.lastYear)}</strong>
                       {rangeYoY !== null ? (
                         <span className={rangeYoY >= 0 ? "up" : "down"}>
                           {rangeYoY >= 0 ? "+" : ""}
@@ -6101,15 +6084,8 @@ function Dashboard() {
                         <span>—</span>
                       )}
                     </div>
-                    <div
-                      className="range-chip"
-                      title={
-                        compareTrimmed
-                          ? `本月 ${compareEnd + 1}日 起尚無資料，上月同區間只比到 ${compareEnd} 日`
-                          : undefined
-                      }
-                    >
-                      上月({rangeStats.prevMonthTab})同區間{compareLabel}{" "}
+                    <div className="range-chip">
+                      上月({rangeStats.prevMonthTab})同區間{" "}
                       <strong>{money(rangeStats.prevMonth)}</strong>
                       {rangeMoM !== null ? (
                         <span className={rangeMoM >= 0 ? "up" : "down"}>
@@ -6120,8 +6096,15 @@ function Dashboard() {
                         <span>—</span>
                       )}
                     </div>
+                    {/* 0 天時顯示「—」不顯示 $0：區間內還沒有這種日子（例：月初選到週末前），
+                        印 $0 會被讀成「那天做 0 元」 */}
                     <div className="range-chip">
-                      平日均 <strong>{money(dayTypeStats.avgWeekday)}</strong>
+                      平日均{" "}
+                      <strong>
+                        {dayTypeStats.wdDays
+                          ? money(dayTypeStats.avgWeekday)
+                          : "—"}
+                      </strong>
                       <span>({dayTypeStats.wdDays}天)</span>
                     </div>
                     {holidayTableIncomplete(
@@ -6140,7 +6123,12 @@ function Dashboard() {
                       </div>
                     )}
                     <div className="range-chip">
-                      假日均 <strong>{money(dayTypeStats.avgWeekend)}</strong>
+                      假日均{" "}
+                      <strong>
+                        {dayTypeStats.weDays
+                          ? money(dayTypeStats.avgWeekend)
+                          : "—"}
+                      </strong>
                       <span>({dayTypeStats.weDays}天)</span>
                       {dayTypeStats.diffPct !== null && (
                         <span
