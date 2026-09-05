@@ -1997,6 +1997,16 @@ function Dashboard() {
     document.documentElement.setAttribute("data-theme", theme);
   }, [theme]);
 
+  // 手機檢視的前提：宿主頁面若沒有 viewport meta，行動瀏覽器會用 980px 虛擬寬度整頁縮放，
+  // 底下所有 @media 規則等於不存在（字縮成螞蟻、要一直捏放大）。缺了才補一顆，不覆寫宿主既有設定。
+  useEffect(() => {
+    if (document.querySelector('meta[name="viewport"]')) return;
+    const m = document.createElement("meta");
+    m.name = "viewport";
+    m.content = "width=device-width, initial-scale=1";
+    document.head.appendChild(m);
+  }, []);
+
   useEffect(() => {
     allYearsRef.current = allYears;
   });
@@ -4620,6 +4630,79 @@ function Dashboard() {
           .cell-input { height: 42px; }
         }
 
+        /* ── 手機（≤600px）── 老闆 2026-09-04 指定：「手機不需要的可以省略、
+           電腦版不動、只是要更方便觀看」。手機是「看」的場景（輸入都在桌機做，
+           而且營收欄位早已全自動餵數），所以這段只做兩件事：
+             ① 省略純裝飾字與桌機專用工具 → 同一個螢幕能塞進更多真數字
+             ② 收緊間距與圖表高度 → 從頭捲到表格的距離砍掉約一半
+           整段包在 media 內，桌機一條規則都沒動。 */
+        @media (max-width: 600px) {
+          /* ① 省略：英文裝飾標、鍵盤操作說明、桌機專用按鈕（功能沒移除，只是手機不顯示） */
+          .eyebrow,
+          .page-subtitle,
+          .section-header p,
+          .big-header-note,
+          .selector-label,
+          .toggle-label,
+          .header-actions .desk-only { display: none; }
+          /* KPI 小字只砍純裝飾的兩張（FISCAL YEAR TOTAL／ANNUAL TARGET）；
+             中間那張是「含今日進度／至昨日」＝資料到哪天的口徑，手機更要留著 */
+          .kpi-card.primary .kpi-helper,
+          .kpi-card.neutral .kpi-helper { display: none; }
+
+          /* ② 版面收緊 */
+          .container { padding: 10px; }
+          .topbar { gap: 10px; margin-bottom: 14px; padding-bottom: 12px; }
+          .page-title { font-size: 26px; margin-top: 0; }
+          .topbar-right { gap: 8px; }
+          /* 年度／月份兩顆並排（原本各佔一整行） */
+          .selector-box { flex: 1 1 0; min-width: 0; padding: 8px 10px; }
+          .theme-toggle { padding: 6px; }
+          .month-start-hint { flex-wrap: wrap; gap: 8px; padding: 10px 12px; }
+          .month-start-hint .btn-add { margin-left: 0; }
+
+          .section-card { padding: 14px; }
+          .section-header { margin-bottom: 10px; gap: 10px; }
+          .kpi-card { min-height: 0; padding: 16px; }
+          .kpi-head { margin-bottom: 10px; }
+          .kpi-value { font-size: 28px; }
+          .kpi-delta { margin-top: 10px; }
+          .summary-value { font-size: 22px; }
+          .summary-value.soft { font-size: 17px; }
+
+          /* 圖表：手機不需要 480px 高的柱狀圖，看得出高低就夠
+             （高度是 inline style，必須 !important 才蓋得掉） */
+          .trend-chart-box { min-height: 230px !important; max-height: 250px !important; }
+          .pie-wrap { width: 176px; height: 176px; }
+          .pie-center .big { font-size: 15px; }
+
+          .big-header { padding: 14px; gap: 8px; }
+          .big-header-title h3 { font-size: 19px; }
+          .big-revenue { font-size: 26px; }
+          .header-actions { margin-bottom: 6px; }
+          .work-grid { padding: 12px; gap: 12px; }
+          .range-chip { font-size: 10px; padding: 5px 8px; }
+
+          /* 表格：內部捲動＋表頭釘住，捲到 20 號還看得出哪欄是哪個通路；
+             輸入框在手機去掉外框當純數字讀（點下去仍可編輯，聚焦時框線回來），
+             一欄省下約 16px，同一個螢幕多看得到一個通路 */
+          .table-scroll { max-height: 70vh; -webkit-overflow-scrolling: touch; }
+          table { font-size: 12px; }
+          thead th { padding: 8px 6px; font-size: 10px; letter-spacing: .02em; }
+          tbody td { padding: 4px 5px; }
+          .sticky-left { padding-left: 8px; }
+          .cell-input,
+          [data-theme="light"] .cell-input {
+            height: 38px; font-size: 12px; padding: 0 5px;
+            border-color: transparent; background: transparent;
+          }
+          .cell-input:focus,
+          [data-theme="light"] .cell-input:focus {
+            border-color: var(--gold-dim);
+            background: var(--bg-surface);
+          }
+        }
+
         /* ── Theme Toggle ── */
         .theme-toggle {
           display: flex;
@@ -4920,6 +5003,7 @@ function Dashboard() {
                   {/* 圖表吃可用高度但封頂 480：柱差更好讀、又不會稀疏；
                       殘餘差額由右側統計卡 space-between 吸收，底部依然切齊 */}
                   <div
+                    className="trend-chart-box"
                     style={{
                       flex: 1,
                       minHeight: 380,
@@ -5585,10 +5669,12 @@ function Dashboard() {
                 </div>
               </div>
               <div className="big-header-right">
+                {/* desk-only：復原/重做/匯出/備份/還原都是桌機作業，手機只留「看昨日」
+                    （手機版把它們收起來是為了讓標題列不佔掉半個螢幕，功能未移除） */}
                 <div className="header-actions">
                   <button
                     type="button"
-                    className="btn-add"
+                    className="btn-add desk-only"
                     onClick={handleUndo}
                     disabled={!canUndo}
                     title="復原 (Ctrl+Z)"
@@ -5598,7 +5684,7 @@ function Dashboard() {
                   </button>
                   <button
                     type="button"
-                    className="btn-add"
+                    className="btn-add desk-only"
                     onClick={handleRedo}
                     disabled={!canRedo}
                     title="重做 (Ctrl+Shift+Z / Ctrl+Y)"
@@ -5608,7 +5694,7 @@ function Dashboard() {
                   </button>
                   <button
                     type="button"
-                    className="btn-add"
+                    className="btn-add desk-only"
                     onClick={exportCsv}
                     title="匯出當月每日表格（Excel 可直接開啟）"
                   >
@@ -5617,7 +5703,7 @@ function Dashboard() {
                   </button>
                   <button
                     type="button"
-                    className="btn-add"
+                    className="btn-add desk-only"
                     onClick={exportJson}
                     title="下載完整 JSON 備份（所有年度）"
                   >
@@ -5626,7 +5712,7 @@ function Dashboard() {
                   </button>
                   <button
                     type="button"
-                    className="btn-add"
+                    className="btn-add desk-only"
                     onClick={() => fileInputRef.current?.click()}
                     title="從 JSON 備份還原（將覆蓋現有資料）"
                   >
