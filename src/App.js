@@ -4778,8 +4778,12 @@ function Dashboard() {
           .topbar { gap: 10px; margin-bottom: 14px; padding-bottom: 12px; }
           .page-title { font-size: 26px; margin-top: 0; }
           .topbar-right { gap: 8px; }
-          /* 年度／月份兩顆並排（原本各佔一整行） */
+          /* 年度／月份兩顆並排（原本各佔一整行）。
+             selector-row 沒有 min-width:0，裡面的 select 撐著不縮 → 月份那顆整個超出畫面
+             右緣 4px、箭頭甚至到 407px（量出來的）；補上讓它能縮 */
           .selector-box { flex: 1 1 0; min-width: 0; padding: 8px 10px; }
+          .selector-row { min-width: 0; gap: 4px; }
+          .selector-row select { min-width: 0; flex: 1 1 auto; }
           .theme-toggle { padding: 6px; }
           .month-start-hint { flex-wrap: wrap; gap: 8px; padding: 10px 12px; }
           .month-start-hint .btn-add { margin-left: 0; }
@@ -4795,6 +4799,33 @@ function Dashboard() {
           .kpi-delta { margin-top: 10px; }
           .summary-value { font-size: 22px; }
           .summary-value.soft { font-size: 17px; }
+          /* 趨勢圖右側那四張統計卡（達標配速／本月風險／預估落點／與目標差額）：
+             桌機是 230px 窄欄，≤1280 變全寬直排 → 手機上四張全寬卡疊起來近 600px 高。
+             改成兩欄格狀，字級縮到仍放得下最長金額（-$2,320,806 在 18px 約 119px＜欄寬 137px） */
+          .right-stack {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 8px;
+          }
+          .stat-soft { padding: 10px 10px 10px 12px; }
+          .stat-label { font-size: 11px; gap: 5px; }
+          .stat-value { margin-top: 6px; font-size: 18px; }
+          .stat-note { margin-top: 4px; font-size: 10px; line-height: 1.45; }
+
+          /* 同一類型（全寬直排、內容其實塞得下兩欄）另外兩處，09-07 一起收：
+             ① 目標成長＋年度配速（.exec-side，≤980 被改成單欄）
+             ② 營收結構的通路排名（.rank-list，五列各 58px） */
+          .exec-side { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+          .rank-list {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 6px;
+          }
+          .rank-item { padding: 9px 10px; gap: 6px; }
+          .rank-num { width: 22px; height: 22px; font-size: 10px; border-radius: 6px; }
+          .rank-left { gap: 6px; }
+          .rank-name { font-size: 12px; }
+          .rank-right .v1 { font-size: 12px; }
 
           /* 圖表：手機不需要 480px 高的柱狀圖，看得出高低就夠
              （高度是 inline style，必須 !important 才蓋得掉） */
