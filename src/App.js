@@ -1997,6 +1997,16 @@ function Dashboard() {
     document.documentElement.setAttribute("data-theme", theme);
   }, [theme]);
 
+  // 月份列是橫向捲動的（12 顆放不下一行）：手機上「9月」會停在畫面外，
+  // 看起來像沒有在選中的月份。切月時把作用中那顆捲到中間——只動容器的 scrollLeft，
+  // 不用 scrollIntoView（那個會連帶把整頁往下捲到表格）。
+  useEffect(() => {
+    const wrap = document.querySelector(".toolbar-left");
+    const el = wrap?.querySelector(".tab-btn.active");
+    if (!wrap || !el) return;
+    wrap.scrollLeft = el.offsetLeft - wrap.clientWidth / 2 + el.offsetWidth / 2;
+  }, [activeMonth, activeYear]);
+
   // 手機檢視的前提：宿主頁面若沒有 viewport meta，行動瀏覽器會用 980px 虛擬寬度整頁縮放，
   // 底下所有 @media 規則等於不存在（字縮成螞蟻、要一直捏放大）。缺了才補一顆，不覆寫宿主既有設定。
   useEffect(() => {
@@ -4630,78 +4640,6 @@ function Dashboard() {
           .cell-input { height: 42px; }
         }
 
-        /* ── 手機（≤600px）── 老闆 2026-09-04 指定：「手機不需要的可以省略、
-           電腦版不動、只是要更方便觀看」。手機是「看」的場景（輸入都在桌機做，
-           而且營收欄位早已全自動餵數），所以這段只做兩件事：
-             ① 省略純裝飾字與桌機專用工具 → 同一個螢幕能塞進更多真數字
-             ② 收緊間距與圖表高度 → 從頭捲到表格的距離砍掉約一半
-           整段包在 media 內，桌機一條規則都沒動。 */
-        @media (max-width: 600px) {
-          /* ① 省略：英文裝飾標、鍵盤操作說明、桌機專用按鈕（功能沒移除，只是手機不顯示） */
-          .eyebrow,
-          .page-subtitle,
-          .section-header p,
-          .big-header-note,
-          .selector-label,
-          .toggle-label,
-          .header-actions .desk-only { display: none; }
-          /* KPI 小字只砍純裝飾的兩張（FISCAL YEAR TOTAL／ANNUAL TARGET）；
-             中間那張是「含今日進度／至昨日」＝資料到哪天的口徑，手機更要留著 */
-          .kpi-card.primary .kpi-helper,
-          .kpi-card.neutral .kpi-helper { display: none; }
-
-          /* ② 版面收緊 */
-          .container { padding: 10px; }
-          .topbar { gap: 10px; margin-bottom: 14px; padding-bottom: 12px; }
-          .page-title { font-size: 26px; margin-top: 0; }
-          .topbar-right { gap: 8px; }
-          /* 年度／月份兩顆並排（原本各佔一整行） */
-          .selector-box { flex: 1 1 0; min-width: 0; padding: 8px 10px; }
-          .theme-toggle { padding: 6px; }
-          .month-start-hint { flex-wrap: wrap; gap: 8px; padding: 10px 12px; }
-          .month-start-hint .btn-add { margin-left: 0; }
-
-          .section-card { padding: 14px; }
-          .section-header { margin-bottom: 10px; gap: 10px; }
-          .kpi-card { min-height: 0; padding: 16px; }
-          .kpi-head { margin-bottom: 10px; }
-          .kpi-value { font-size: 28px; }
-          .kpi-delta { margin-top: 10px; }
-          .summary-value { font-size: 22px; }
-          .summary-value.soft { font-size: 17px; }
-
-          /* 圖表：手機不需要 480px 高的柱狀圖，看得出高低就夠
-             （高度是 inline style，必須 !important 才蓋得掉） */
-          .trend-chart-box { min-height: 230px !important; max-height: 250px !important; }
-          .pie-wrap { width: 176px; height: 176px; }
-          .pie-center .big { font-size: 15px; }
-
-          .big-header { padding: 14px; gap: 8px; }
-          .big-header-title h3 { font-size: 19px; }
-          .big-revenue { font-size: 26px; }
-          .header-actions { margin-bottom: 6px; }
-          .work-grid { padding: 12px; gap: 12px; }
-          .range-chip { font-size: 10px; padding: 5px 8px; }
-
-          /* 表格：內部捲動＋表頭釘住，捲到 20 號還看得出哪欄是哪個通路；
-             輸入框在手機去掉外框當純數字讀（點下去仍可編輯，聚焦時框線回來），
-             一欄省下約 16px，同一個螢幕多看得到一個通路 */
-          .table-scroll { max-height: 70vh; -webkit-overflow-scrolling: touch; }
-          table { font-size: 12px; }
-          thead th { padding: 8px 6px; font-size: 10px; letter-spacing: .02em; }
-          tbody td { padding: 4px 5px; }
-          .sticky-left { padding-left: 8px; }
-          .cell-input,
-          [data-theme="light"] .cell-input {
-            height: 38px; font-size: 12px; padding: 0 5px;
-            border-color: transparent; background: transparent;
-          }
-          .cell-input:focus,
-          [data-theme="light"] .cell-input:focus {
-            border-color: var(--gold-dim);
-            background: var(--bg-surface);
-          }
-        }
 
         /* ── Theme Toggle ── */
         .theme-toggle {
@@ -4787,6 +4725,122 @@ function Dashboard() {
         /* ── Recharts text ── */
         [data-theme="dark"] .recharts-text { fill: #8296B3 !important; font-family: 'DM Mono', monospace !important; }
         [data-theme="light"] .recharts-text { fill: #64646B !important; font-family: 'DM Mono', monospace !important; }
+
+        /* ── 手機（≤600px）── 老闆 2026-09-04 指定：「手機不需要的可以省略、
+           電腦版不動、只是要更方便觀看」。手機是「看」的場景（輸入都在桌機做，
+           而且營收欄位早已全自動餵數），所以這段只做兩件事：
+             ① 省略純裝飾字與桌機專用工具 → 同一個螢幕能塞進更多真數字
+             ② 收緊間距與圖表高度 → 從頭捲到表格的距離砍掉約一半
+           整段包在 media 內，桌機一條規則都沒動。 */
+        @media (max-width: 600px) {
+          /* ① 省略：英文裝飾標、鍵盤操作說明、桌機專用按鈕（功能沒移除，只是手機不顯示） */
+          .eyebrow,
+          .page-subtitle,
+          .section-header p,
+          .big-header-note,
+          .selector-label,
+          .toggle-label { display: none; }
+          /* desk-only＝桌機才需要的操作（復原/重做/匯出/備份/還原、新增渠道、新增通路、
+             搜尋日期）。!important 是必要的：其中兩排的 display:flex 寫在 inline style，
+             不加就蓋不掉、規則會靜默失效 */
+          .desk-only { display: none !important; }
+          /* 表頭的「自動」小標在手機吃掉整整一欄的寬度（同樣的資訊在廣告面板還看得到），
+             拿掉之後同一個螢幕能多看到一個通路 */
+          thead .auto-chip { display: none; }
+          /* 表格總寬的真正兇手在頁尾：「MONTHLY CLOSING」把日期欄撐到 127px、
+             「Total Revenue」把小計欄撐到 160px（量出來的，不是猜的）。
+             兩個都是英文裝飾標，手機拿掉，兩欄合計省下約 140px */
+          .tfoot-sub,
+          .tfoot-total-label { display: none; }
+          /* 每一欄的寬度其實是被頁尾那排大字撐開的（tfoot td 內距 14px＋大字級），
+             不是內文——縮頁尾就等於縮整張表 */
+          tfoot td { padding: 8px 4px; }
+          .tfoot-title { font-size: 12px; }
+          .tfoot-number { font-size: 12px; }
+          .tfoot-total-value { font-size: 14px; }
+          /* 小計欄被頁尾總計格的 min-width:160px 釘住（量出來的）——手機放寬 */
+          .tfoot-right.upgraded.grand-total { min-width: 86px; }
+          /* 刪除通路/渠道的垃圾桶：手機是看的場景，藏起來同時避免滑動時誤刪；
+             FX 標記（代表該通路不可刪）在刪除鍵藏起來後就沒有意義了 */
+          .icon-btn,
+          .fixed-badge { display: none; }
+          /* field-box 的下拉在手機會出現兩個箭頭（原生箭頭＋自繪 ChevronDown）。
+             只砍「後面真的跟著一顆自繪箭頭」的那些——區間自訂的兩個 select 沒有配圖示，
+             一律砍會讓它們看起來不像下拉。:has() 不支援時規則整條略過，退回雙箭頭無害 */
+          .field-box select:has(+ svg) { appearance: none; -webkit-appearance: none; }
+          /* KPI 小字只砍純裝飾的兩張（FISCAL YEAR TOTAL／ANNUAL TARGET）；
+             中間那張是「含今日進度／至昨日」＝資料到哪天的口徑，手機更要留著 */
+          .kpi-card.primary .kpi-helper,
+          .kpi-card.neutral .kpi-helper { display: none; }
+
+          /* ② 版面收緊 */
+          .container { padding: 10px; }
+          .topbar { gap: 10px; margin-bottom: 14px; padding-bottom: 12px; }
+          .page-title { font-size: 26px; margin-top: 0; }
+          .topbar-right { gap: 8px; }
+          /* 年度／月份兩顆並排（原本各佔一整行） */
+          .selector-box { flex: 1 1 0; min-width: 0; padding: 8px 10px; }
+          .theme-toggle { padding: 6px; }
+          .month-start-hint { flex-wrap: wrap; gap: 8px; padding: 10px 12px; }
+          .month-start-hint .btn-add { margin-left: 0; }
+
+          .section-card { padding: 14px; }
+          /* 區塊標題改上下排：原本標題與右側控制項擠同一行，
+             「營收趨勢總覽」被折成兩行、「全通路」chip 還被壓成直書 */
+          .section-header { flex-direction: column; align-items: stretch; margin-bottom: 10px; gap: 8px; }
+          .chip { white-space: nowrap; }
+          .kpi-card { min-height: 0; padding: 16px; }
+          .kpi-head { margin-bottom: 10px; }
+          .kpi-value { font-size: 28px; }
+          .kpi-delta { margin-top: 10px; }
+          .summary-value { font-size: 22px; }
+          .summary-value.soft { font-size: 17px; }
+
+          /* 圖表：手機不需要 480px 高的柱狀圖，看得出高低就夠
+             （高度是 inline style，必須 !important 才蓋得掉） */
+          .trend-chart-box { min-height: 230px !important; max-height: 250px !important; }
+          /* ⚠ 甜甜圈的 innerRadius/outerRadius 是固定 px（62/88），把 .pie-wrap 縮到
+             176px 會讓圓被切掉一半——手機寬度放得下 230px，這裡刻意不縮 */
+
+          .big-header { padding: 14px; gap: 6px; }
+          .big-header-title h3 { font-size: 19px; }
+          /* 「看昨日／2026／9月／金額」原本各佔一行（近 190px），排成一列省一半 */
+          .big-header-right {
+            display: flex; align-items: baseline;
+            flex-wrap: wrap; gap: 4px 10px;
+          }
+          .big-revenue { font-size: 24px; margin-top: 0; }
+          .header-actions { margin-bottom: 0; }
+          .work-grid { padding: 12px; gap: 12px; }
+          /* 廣告投放改兩欄（垃圾桶已藏起來，寬度夠）：整塊高度砍半 */
+          .ad-grid { grid-template-columns: repeat(2,minmax(0,1fr)); }
+          /* 對照 chip 原本一片佔一行（六行）：縮字級與內距讓它們並排 */
+          .range-compare { margin-left: 0; gap: 5px; }
+          .range-chip { font-size: 10px; padding: 4px 7px; gap: 4px; }
+
+          /* 表格：內部捲動＋表頭釘住，捲到 20 號還看得出哪欄是哪個通路；
+             輸入框在手機去掉外框當純數字讀（點下去仍可編輯，聚焦時框線回來），
+             一欄省下約 16px，同一個螢幕多看得到一個通路 */
+          .table-scroll { max-height: 70vh; -webkit-overflow-scrolling: touch; }
+          table { font-size: 12px; }
+          thead th { padding: 8px 4px; font-size: 10px; letter-spacing: .02em; }
+          tbody td { padding: 4px 4px; }
+          .sticky-left { padding-left: 8px; font-size: 11px; }
+          /* ⚠ 欄寬的真正元凶是 <input> 的預設固有寬度（約 170px），不是 padding——
+             桌機 1580px 看不出來，手機一欄就吃掉半個螢幕。給定寬度後
+             一個畫面看得到「日期＋3~4 個通路」而不是 2 個 */
+          .cell-input,
+          [data-theme="light"] .cell-input {
+            width: 64px; min-width: 0;
+            height: 38px; font-size: 12px; padding: 0 4px;
+            border-color: transparent; background: transparent;
+          }
+          .cell-input:focus,
+          [data-theme="light"] .cell-input:focus {
+            border-color: var(--gold-dim);
+            background: var(--bg-surface);
+          }
+        }
       `}</style>
 
       <div className="app" data-theme={theme}>
@@ -5809,7 +5863,10 @@ function Dashboard() {
                       </div>
                     ))}
                   </div>
-                  <div style={{ marginTop: 10, display: "flex", gap: 6 }}>
+                  <div
+                    className="desk-only"
+                    style={{ marginTop: 10, display: "flex", gap: 6 }}
+                  >
                     <input
                       value={newAdChannel}
                       onChange={(e) => setNewAdChannel(e.target.value)}
@@ -5959,6 +6016,7 @@ function Dashboard() {
                     </div>
                   )}
                   <div
+                    className="desk-only"
                     style={{
                       marginTop: 14,
                       paddingTop: 14,
@@ -6034,7 +6092,10 @@ function Dashboard() {
                       </button>
                     ))}
                   </div>
-                  <div className="field-box" style={{ position: "relative" }}>
+                  <div
+                    className="field-box desk-only"
+                    style={{ position: "relative" }}
+                  >
                     <Search size={14} color="var(--text-dim)" />
                     <input
                       value={search}
