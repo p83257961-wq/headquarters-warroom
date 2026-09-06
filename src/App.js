@@ -4821,11 +4821,22 @@ function Dashboard() {
           /* 表格：內部捲動＋表頭釘住，捲到 20 號還看得出哪欄是哪個通路；
              輸入框在手機去掉外框當純數字讀（點下去仍可編輯，聚焦時框線回來），
              一欄省下約 16px，同一個螢幕多看得到一個通路 */
-          .table-scroll { max-height: 70vh; -webkit-overflow-scrolling: touch; }
+          /* 70vh 在 iOS Safari 是以「網址列收起來」的高度算的，捲動區會有一截藏在網址列下；
+             dvh 才是當下真正看得到的高度。舊瀏覽器不認 dvh 會略過該行、退回上面的 vh */
+          .table-scroll {
+            max-height: 70vh;
+            max-height: 70dvh;
+            -webkit-overflow-scrolling: touch;
+          }
           table { font-size: 12px; }
           thead th { padding: 8px 4px; font-size: 10px; letter-spacing: .02em; }
           tbody td { padding: 4px 4px; }
           .sticky-left { padding-left: 8px; font-size: 11px; }
+          /* 只要有一列出現「今天」「▼ 異常低」等標記，nowrap 就會把日期欄整欄撐到 143px
+             （表格欄寬取最寬的那格）。手機允許換行：標記掉到日期下面一行，欄寬回到 ~70px，
+             整張表少 70px。標記本身不刪——那是老闆要看的訊號 */
+          tbody .sticky-left { white-space: normal; }
+          .anomaly-badge { white-space: nowrap; }
           /* ⚠ 欄寬的真正元凶是 <input> 的預設固有寬度（約 170px），不是 padding——
              桌機 1580px 看不出來，手機一欄就吃掉半個螢幕。給定寬度後
              一個畫面看得到「日期＋3~4 個通路」而不是 2 個 */
