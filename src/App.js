@@ -1596,7 +1596,7 @@ function SyncBadge({ syncState, lastSyncedAt, onRetry }) {
   const Icon = meta.icon;
   return (
     <div
-      className={`sync-badge ${meta.cls}`}
+      className={`sync-badge cloud-badge ${meta.cls}`}
       role="status"
       aria-live="polite"
       title={lastSyncedAt ? `最後同步：${lastSyncedAt}` : ""}
@@ -1668,7 +1668,7 @@ function FeedBadge({ feedAt, feedAtShopee, feedDataTo, feedDataToShopee }) {
     const h = (Date.now() - new Date(stamps[0]).getTime()) / 3600000;
     return (
       <div
-        className="sync-badge sync-error"
+        className="sync-badge feed-badge sync-error"
         role="status"
         aria-live="polite"
         title={`${missing} 餵數從未成功執行；另一支最後更新 ${new Date(stamps[0]).toLocaleString("zh-TW")}`}
@@ -1689,7 +1689,7 @@ function FeedBadge({ feedAt, feedAtShopee, feedDataTo, feedDataToShopee }) {
     ).toLocaleString("zh-TW")}${reported ? "（資料迄日由腳本回報）" : "（資料迄日依心跳時間推算）"}`;
     return (
       <div
-        className={`sync-badge ${
+        className={`sync-badge feed-badge ${
           stale ? "sync-error" : lagging ? "sync-syncing" : "sync-synced"
         }`}
         role="status"
@@ -4767,7 +4767,8 @@ function Dashboard() {
           /* field-box 的下拉在手機會出現兩個箭頭（原生箭頭＋自繪 ChevronDown）。
              只砍「後面真的跟著一顆自繪箭頭」的那些——區間自訂的兩個 select 沒有配圖示，
              一律砍會讓它們看起來不像下拉。:has() 不支援時規則整條略過，退回雙箭頭無害 */
-          .field-box select:has(+ svg) { appearance: none; -webkit-appearance: none; }
+          .field-box select:has(+ svg),
+          .selector-row select:has(+ svg) { appearance: none; -webkit-appearance: none; }
           /* KPI 小字只砍純裝飾的兩張（FISCAL YEAR TOTAL／ANNUAL TARGET）；
              中間那張是「含今日進度／至昨日」＝資料到哪天的口徑，手機更要留著 */
           .kpi-card.primary .kpi-helper,
@@ -4780,9 +4781,19 @@ function Dashboard() {
           .topbar-right { gap: 8px; }
           /* 年度／月份兩顆並排（原本各佔一整行）。
              selector-row 沒有 min-width:0，裡面的 select 撐著不縮 → 月份那顆整個超出畫面
-             右緣 4px、箭頭甚至到 407px（量出來的）；補上讓它能縮 */
-          .selector-box { flex: 1 1 0; min-width: 0; padding: 8px 10px; }
-          .selector-row { min-width: 0; gap: 4px; }
+             右緣 4px、箭頭甚至到 407px（量出來的）；補上讓它能縮。
+             ⚠ 但不能只給 min-width:0——那會讓兩顆被同列的徽章擠成 53px，
+             年份顯示成「20」、月份被箭頭壓住。所以給下限寬度，擠不下就整組換行
+             （topbar-right 本來就 flex-wrap）。下限抓 108px：
+             深淺鈕 80＋間距 16＋兩顆各 129.5 ＝ 355，剛好一排。 */
+          .selector-box { flex: 1 1 108px; min-width: 108px; padding: 8px 10px; }
+          /* 老闆 09-08：頂部只留「深淺＋年份月份」一排。
+             ①「已同步」是純瀏覽器端狀態，手機整顆不顯示。
+             ②「數據至 M/D」只在**綠燈（一切正常）**時隱藏——餵數中斷（紅）或待今晨補數（藍）
+                照樣冒出來。隱藏的是雜訊，不是警報。 */
+          .cloud-badge { display: none; }
+          .feed-badge.sync-synced { display: none; }
+          .selector-row { min-width: 0; gap: 6px; }
           .selector-row select { min-width: 0; flex: 1 1 auto; }
           .theme-toggle { padding: 6px; }
           .month-start-hint { flex-wrap: wrap; gap: 8px; padding: 10px 12px; }
@@ -4797,6 +4808,22 @@ function Dashboard() {
           .kpi-head { margin-bottom: 10px; }
           .kpi-value { font-size: 28px; }
           .kpi-delta { margin-top: 10px; }
+          /* 老闆 09-07：當月營收與年度目標達成率並排。
+             YTD 不併——$17,206,143 在 28px 要 185px，半欄只有 141px，併了必換行；
+             它是頭條數字，獨佔一行反而是對的階層。 */
+          .grid-3 {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 8px;
+          }
+          .grid-3 > :first-child { grid-column: 1 / -1; }
+          /* 並排那兩張的欄寬只有 141px：月營收旺季會到 $4,500,000（28px 需 168px），
+             所以字級收到 22px（需 132px）＋圖示縮小讓標題留得住一行 */
+          .grid-3 > :not(:first-child) .kpi-value { font-size: 22px; }
+          .grid-3 > :not(:first-child) .kpi-card,
+          .grid-3 > :not(:first-child) { padding: 14px; }
+          .grid-3 > :not(:first-child) .icon-box { width: 28px; height: 28px; }
+          .grid-3 > :not(:first-child) .kpi-head { gap: 8px; margin-bottom: 8px; }
           .summary-value { font-size: 22px; }
           .summary-value.soft { font-size: 17px; }
           /* 趨勢圖右側那四張統計卡（達標配速／本月風險／預估落點／與目標差額）：
