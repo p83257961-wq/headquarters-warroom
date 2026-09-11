@@ -2007,6 +2007,12 @@ function Dashboard() {
     wrap.scrollLeft = el.offsetLeft - wrap.clientWidth / 2 + el.offsetWidth / 2;
   }, [activeMonth, activeYear]);
 
+  // 分頁名稱：宿主頁面預設叫「React」，手機分頁列／書籤只看得到那四個字。
+  // 這裡直接設成戰情室名稱，不管貼到哪個宿主都會對（與 viewport 同屬宿主頁面修補）。
+  useEffect(() => {
+    document.title = "總部營收戰情室";
+  }, []);
+
   // 手機檢視的前提：宿主頁面若沒有 viewport meta，行動瀏覽器會用 980px 虛擬寬度整頁縮放，
   // 底下所有 @media 規則等於不存在（字縮成螞蟻、要一直捏放大）。缺了才補一顆，不覆寫宿主既有設定。
   useEffect(() => {
