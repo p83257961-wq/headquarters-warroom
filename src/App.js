@@ -1241,6 +1241,15 @@ const n = (v) => {
   return Number.isFinite(x) ? x : 0;
 };
 
+// 目標成長率：保留一個小數點（雲端現值是 "8.4"）。原本用 /[^0-9]/ 淨化，
+// 「匯入備份」會把 8.4 變 84、輸入框也打不出小數，錯值還會整份寫回雲端（2026-09-23 稽核 HIGH）
+const sanitizeRate = (v) => {
+  const s = String(v ?? "").replace(/[^0-9.]/g, "");
+  const i = s.indexOf(".");
+  // 只留第一個小數點（逐鍵輸入 "9." 要能保留，才打得出 9.2）
+  return i < 0 ? s : s.slice(0, i + 1) + s.slice(i + 1).replace(/\./g, "");
+};
+
 const money = (v) =>
   new Intl.NumberFormat("zh-TW", {
     style: "currency",
@@ -1274,16 +1283,21 @@ const colorOf = (k, i = 0, theme = "dark") => {
   return palette[k] || fallback[i % fallback.length];
 };
 
+// 回音判斷（updatedBy === 自己）必須以「分頁」為單位：原本整個瀏覽器共用 localStorage
+// 裡同一個 id，同一瀏覽器的兩個分頁會把對方的寫入當成自己的回音——成長率不套用、
+// 復原堆疊不作廢（2026-09-23 稽核 LOW）。瀏覽器層級的 id 保留當前綴方便追查，後面加分頁亂數
+const TAB_SUFFIX = Math.random().toString(36).slice(2, 8);
 function getClientId() {
   try {
-    const existing = localStorage.getItem(CLIENT_ID_KEY);
-    if (existing) return existing;
-    const id =
-      "client_" +
-      Math.random().toString(36).slice(2) +
-      Date.now().toString(36);
-    localStorage.setItem(CLIENT_ID_KEY, id);
-    return id;
+    let base = localStorage.getItem(CLIENT_ID_KEY);
+    if (!base) {
+      base =
+        "client_" +
+        Math.random().toString(36).slice(2) +
+        Date.now().toString(36);
+      localStorage.setItem(CLIENT_ID_KEY, base);
+    }
+    return `${base}_${TAB_SUFFIX}`;
   } catch {
     // 儲存被封鎖（無痕/嚴格隱私模式）時退回工作階段限定 id，不讓整頁掛掉
     return "client_session_" + Math.random().toString(36).slice(2);
@@ -1291,6 +1305,15 @@ function getClientId() {
 }
 
 // 會計月份 → 實際日曆年月（4月起算，1~3月落在次一日曆年）
+// 會計年度＋月份分頁若是「現在這個月」，回傳今天幾號，否則 null
+function runningDayOf(year, monthTab) {
+  const { calendarYear, calendarMonth } = getCalendarYearMonth(year, monthTab);
+  const t = new Date();
+  return t.getFullYear() === calendarYear && t.getMonth() + 1 === calendarMonth
+    ? t.getDate()
+    : null;
+}
+
 function getCalendarYearMonth(year, monthTab) {
   const monthIndex = MONTH_TABS.indexOf(monthTab);
   const calendarMonth = monthIndex < 9 ? monthIndex + 4 : monthIndex - 8;
@@ -1410,8 +1433,14 @@ function buildAllYears() {
 
 function sanitizeMonthState(monthState) {
   const safe = monthState || {};
+  // day 一律正規化成數字：bot 自建骨架曾把 day 寫成字串，「今天」列用 === 比對
+  // 會整月失效（標記、高亮、自動捲動）；壞掉的 null 列也補回，避免 render 崩潰
   const rows = Array.isArray(safe.rows)
-    ? safe.rows
+    ? safe.rows.map((r, i) =>
+        r && typeof r === "object"
+          ? { ...r, day: Number(r.day) || i + 1 }
+          : { day: i + 1 }
+      )
     : Array.from({ length: 31 }, (_, i) => ({ day: i + 1 }));
   const dynamicChannels = Array.isArray(safe.dynamicChannels)
     ? [...safe.dynamicChannels]
@@ -1490,7 +1519,16 @@ function sanitizeAllYears(data) {
 
 // 合併月份資料時保留「bot 代管欄位」的最新值（base 為底，auto 欄位取 authoritative）。
 // undo/redo 還原與開機髒月合併都用它——避免把 bot 已校正的自動欄位回滾成舊值
-function mergeKeepAuto(base, authoritative) {
+// handDay：進行中月份的「今天」——那一列的網店／POS／蝦皮是老闆白天手 key 的進度
+// （拍板 #3），bot 次日才會寫，今天還不是 bot 代管；照 base 保留，否則復原鍵對它無效、
+// 開機合併未上雲月份時會被雲端的空字串清掉（2026-09-23 稽核 LOW）
+// perCellOnHandDay（開機合併用）：自動欄位逐格判斷——
+//   · 今天那列：本機有值留本機，空的吃雲端（未上雲的編輯不一定在今天，整列留本機
+//     會用空字串抹掉他機已上雲的今日進度）
+//   · 其他天：雲端有值吃雲端（bot 真值），雲端還是空的（bot 尚未寫到，例如昨晚手 key、
+//     07:31 前重開）就留本機，不讓手 key 被空值蓋掉幾個小時
+// 復原／重做不傳，今天那列整列採用快照（讓復原鍵對今天的手 key 有效）
+function mergeKeepAuto(base, authoritative, handDay = null, perCellOnHandDay = false) {
   if (!authoritative) return base;
   const pick = (src, keys) =>
     Object.fromEntries(
@@ -1498,12 +1536,27 @@ function mergeKeepAuto(base, authoritative) {
         .filter((k) => src?.[k] !== undefined)
         .map((k) => [k, src[k]])
     );
+  const isBlank = (v) => v == null || String(v).trim() === "";
   return {
     ...base,
-    rows: (base.rows || []).map((r, i) => ({
-      ...r,
-      ...pick(authoritative.rows?.[i], AUTO_REV_KEYS),
-    })),
+    rows: (base.rows || []).map((r, i) => {
+      const onHandDay = !!handDay && Number(r?.day) >= handDay;
+      if (!perCellOnHandDay) {
+        return onHandDay
+          ? r
+          : { ...r, ...pick(authoritative.rows?.[i], AUTO_REV_KEYS) };
+      }
+      const remoteRow = authoritative.rows?.[i] || {};
+      const next = { ...r };
+      AUTO_REV_KEYS.forEach((k) => {
+        if (remoteRow[k] === undefined) return;
+        const takeRemote = onHandDay
+          ? isBlank(r?.[k])
+          : !isBlank(remoteRow[k]) || isBlank(r?.[k]);
+        if (takeRemote) next[k] = remoteRow[k];
+      });
+      return next;
+    }),
     adSpend: { ...(base.adSpend || {}), ...pick(authoritative.adSpend, AUTO_AD_KEYS) },
     orderOverrides: {
       ...(base.orderOverrides || {}),
@@ -1795,9 +1848,10 @@ function TooltipCard({
     ? runningYoY != null
       ? runningYoY.toFixed(1)
       : null
-    : lastYear > 0
+    : // 未來月份（本年實績還是 0）或沒有去年基期：顯示「—」，不印紅字 -100%
+    lastYear > 0 && actual > 0
     ? (((actual - lastYear) / lastYear) * 100).toFixed(1)
-    : "0.0";
+    : null;
   const achieve = target > 0 ? ((actual / target) * 100).toFixed(1) : "0.0";
   const yoyPositive = yoy != null && Number(yoy) >= 0;
   return (
@@ -1821,11 +1875,16 @@ function TooltipCard({
             style={{ background: "#6B7280" }}
           />
           <span className="tooltip-label sec">
-            {isRunning ? `去年同期（1-${runningDays}）` : "去年同期"}
+            {/* 月初還沒有資料（runningDays＝0）時同日區間不存在，數字其實是去年整月 */}
+            {isRunning && runningLastYear != null
+              ? `去年同期（1-${runningDays}）`
+              : isRunning
+              ? "去年整月"
+              : "去年同期"}
           </span>
           <span className="tooltip-val mono sec">{num(lastYear)}</span>
         </div>
-        {isRunning && lastYearFull > 0 && (
+        {isRunning && runningLastYear != null && lastYearFull > 0 && (
           <div className="tooltip-row">
             <span className="tooltip-label sec">去年整月</span>
             <span className="tooltip-val mono sec">{num(lastYearFull)}</span>
@@ -1901,13 +1960,35 @@ function Dashboard() {
         DIRTY_KEY,
         JSON.stringify({
           at: new Date().toISOString(),
-          months: Array.from(dirtyMonthsRef.current),
+          // 「已送出但雲端還沒確認」的月份也要算未上雲：離線時 updateDoc 會一直排隊不回應，
+          // 這時關頁若只存 dirtyMonthsRef（送出前已清空），清單會變空、手 key 永久遺失
+          months: Array.from(
+            new Set([...dirtyMonthsRef.current, ...inflightRef.current.keys()])
+          ),
         })
       );
     } catch {}
   };
   const dirtyRef = useRef(bootDirtyMonths.length > 0); // 本機有尚未寫入雲端的變更
   const dirtyMonthsRef = useRef(new Set(bootDirtyMonths)); // 尚未寫入雲端的月份（"年::月"），供逐月增量同步
+  const inflightRef = useRef(new Map()); // 已送出、雲端尚未確認的月份 → 進行中寫入次數（重疊儲存不互相提早刪除）
+  // 成長率只在「這個分頁真的改過」時才隨增量寫入推上雲：原本每次存任何一格都帶上它，
+  // 沒重新整理的舊分頁會把別處改好的成長率無聲改回舊值
+  const growthDirtyRef = useRef(false);
+  // 尚未讀到雲端文件前一律不收編輯：離線開頁時本機副本可能舊很久，這段期間的輸入
+  // 在上線合併時會以「整月本機」為底，把他機後來手 key 的 MOMO／Pinkoi 等手動欄位抹掉
+  //（2026-09-23 修正複查 MED）。正常連線時解鎖只需約 1 秒，擋下時才顯示提示
+  const [hydrated, setHydrated] = useState(false);
+  const [preHydrateBlocked, setPreHydrateBlocked] = useState(false);
+  const markHydrated = () => {
+    hydratedRef.current = true;
+    setHydrated(true);
+  };
+  const blockIfNotHydrated = () => {
+    if (hydratedRef.current) return false;
+    setPreHydrateBlocked(true);
+    return true;
+  };
   const fullWriteRef = useRef(false); // 需要整份覆寫（匯入還原等大範圍變更）
   const docExistsRef = useRef(false); // 遠端文件是否存在（不存在時 updateDoc 會失敗，需改走 setDoc）
   const saveTimerRef = useRef(null);
@@ -2088,6 +2169,7 @@ function Dashboard() {
   };
 
   const updateActiveMonth = (updater, coalesceKey = null) => {
+    if (blockIfNotHydrated()) return;
     // coalesce key 帶入編輯階段序號：同一格「聚焦→連續輸入」合併為一步，
     // 失焦後再回來改就是新的一步（中間值可以復原回來）
     if (!isUndoingRef.current)
@@ -2113,6 +2195,7 @@ function Dashboard() {
 
   // 通路屬於整個年度：新增／刪除通路時套用到該年度所有月份
   const updateYearMonths = (updater) => {
+    if (blockIfNotHydrated()) return;
     if (!isUndoingRef.current)
       pushUndo(allYears[activeYear] || buildYearState(activeYear));
     dirtyRef.current = true;
@@ -2145,7 +2228,9 @@ function Dashboard() {
         // bot 代管欄位（AUTO_REV_KEYS 日格與單數、AUTO_AD_KEYS 廣告費）不隨復原回滾——
         // 這些欄位的真相在 API，快照可能早於 bot 校正；復原只作用於手 key 欄位
         //（momo/其他等未自動化通路）。用常數迭代，日後新增自動通路不會漏改
-        restored[m] = cur ? mergeKeepAuto(snap, cur) : snap;
+        restored[m] = cur
+          ? mergeKeepAuto(snap, cur, runningDayOf(entry.year, m))
+          : snap;
       });
       return { ...prev, [entry.year]: restored };
     });
@@ -2377,8 +2462,14 @@ function Dashboard() {
   };
 
   const changeGrowthRate = (value) => {
+    if (blockIfNotHydrated()) return;
+    const v = sanitizeRate(value);
+    // 值沒變（多按一個小數點、打字母）就不立旗標：React 不會重繪、存檔不會跑，
+    // 旗標卡在 true 會讓這個分頁略過所有遠端更新，下次編輯再拿舊資料蓋回雲端
+    if (v === targetGrowthRate) return;
     dirtyRef.current = true;
-    setTargetGrowthRate(String(value).replace(/[^0-9]/g, ""));
+    growthDirtyRef.current = true;
+    setTargetGrowthRate(v);
   };
 
   // Firebase auth
@@ -2412,8 +2503,16 @@ function Dashboard() {
         try {
           if (snap.metadata.hasPendingWrites) return;
           if (!snap.exists()) {
+            // 離線開頁（或後端 10 秒沒回應）時，SDK 會先送一個「快取裡沒有」的快照。
+            // 那不是雲端真的沒文件——若照單全收會解鎖儲存，第一次輸入就用本機舊副本
+            // 整份 setDoc 蓋掉雲端（心跳欄位一併被刪）。快取的「不存在」一律不算數，
+            // 等伺服器快照到了走正常合併路徑（2026-09-23 稽核 HIGH）
+            if (snap.metadata.fromCache) {
+              setSyncState("error");
+              return;
+            }
             docExistsRef.current = false;
-            hydratedRef.current = true;
+            markHydrated();
             setSyncState("idle");
             return;
           }
@@ -2433,6 +2532,9 @@ function Dashboard() {
             if (!dirtyRef.current) {
               skipNextSaveRef.current = true;
               setAllYears(sanitizeAllYears(remote.allYears));
+              // 編輯期間被略過的他機成長率也一併帶上（本分頁沒改成長率時）
+              if (!growthDirtyRef.current && remote.targetGrowthRate != null)
+                setTargetGrowthRate(String(remote.targetGrowthRate));
             }
             return;
           }
@@ -2449,7 +2551,14 @@ function Dashboard() {
               const remoteMonth = remoteYears?.[y]?.[m];
               if (!localMonth) return;
               // 本機月份為底（保住未上雲的手 key），bot 代管欄位一律吃遠端最新
-              const merged = mergeKeepAuto(localMonth, remoteMonth);
+              // 今天那列逐格判斷：本機有值才保留本機，空的就吃雲端——
+              // 未上雲的編輯不一定在今天，不可讓本機空字串抹掉他機已上雲的今日進度
+              const merged = mergeKeepAuto(
+                localMonth,
+                remoteMonth,
+                runningDayOf(y, m),
+                true
+              );
               remoteYears[y] = { ...(remoteYears[y] || {}), [m]: merged };
             });
           }
@@ -2465,12 +2574,12 @@ function Dashboard() {
           skipNextSaveRef.current = dirtyMonthsRef.current.size === 0;
           setAllYears(remoteYears);
           setTargetGrowthRate(remoteTargetGrowthRate);
-          hydratedRef.current = true;
+          markHydrated();
           setSyncState("synced");
           setLastSyncedAt(new Date().toLocaleString("zh-TW"));
         } catch (err) {
           console.error(err);
-          hydratedRef.current = true;
+          markHydrated();
           setSyncState("error");
         }
       },
@@ -2478,7 +2587,7 @@ function Dashboard() {
         console.error(err);
         // 尚未成功讀到雲端文件前不解鎖儲存：避免在讀取失敗的狀態下，
         // 第一次輸入就把本機骨架整份 setDoc 蓋掉雲端既有資料
-        if (docExistsRef.current) hydratedRef.current = true;
+        if (docExistsRef.current) markHydrated();
         setSyncState("error");
       }
     );
@@ -2520,6 +2629,17 @@ function Dashboard() {
     saveTimerRef.current = setTimeout(async () => {
       const pendingMonths = Array.from(dirtyMonthsRef.current);
       const fullWrite = fullWriteRef.current || !docExistsRef.current;
+      const inflight = inflightRef.current;
+      pendingMonths.forEach((k) => inflight.set(k, (inflight.get(k) || 0) + 1));
+      const settleInflight = () =>
+        pendingMonths.forEach((k) => {
+          const c = (inflight.get(k) || 0) - 1;
+          if (c > 0) inflight.set(k, c);
+          else inflight.delete(k);
+        });
+      // 送出前就先清旗標（與 dirtyRef 同一套）：寫入途中又改了成長率，下一次儲存照樣會推
+      const growthWasDirty = growthDirtyRef.current;
+      growthDirtyRef.current = false;
       try {
         setSyncState("syncing");
         dirtyRef.current = false;
@@ -2555,7 +2675,8 @@ function Dashboard() {
                 monthHasData(monthVal) ? monthVal : deleteField()
               );
           });
-          args.push(new FieldPath("targetGrowthRate"), targetGrowthRate);
+          if (growthWasDirty)
+            args.push(new FieldPath("targetGrowthRate"), targetGrowthRate);
           args.push(new FieldPath("updatedAt"), serverTimestamp());
           args.push(
             new FieldPath("updatedAtClient"),
@@ -2564,6 +2685,7 @@ function Dashboard() {
           args.push(new FieldPath("updatedBy"), clientIdRef.current);
           await updateDoc(ref, ...args);
         }
+        settleInflight();
         persistDirtyMonths();
         setSyncState("synced");
         setLastSyncedAt(new Date().toLocaleString("zh-TW"));
@@ -2571,6 +2693,8 @@ function Dashboard() {
         console.error(err);
         if (err?.code === "not-found") docExistsRef.current = false;
         dirtyRef.current = true;
+        if (growthWasDirty) growthDirtyRef.current = true;
+        settleInflight();
         pendingMonths.forEach((k) => dirtyMonthsRef.current.add(k));
         setSyncState("error");
         // 5 秒後自動重試（僅在仍有未上雲變更時）：瞬斷不再需要手動點重試，
@@ -2641,6 +2765,11 @@ function Dashboard() {
     return map;
   }, [activeYear, activeMonth, daysInMonth]);
 
+  // 每次 render 重算的「今天」鍵（freshTick 每 5 分鐘重繪一次）：分頁跨夜開著時，
+  // 依賴它的 memo 會在午夜後幾分鐘內換日——原本 todayDay 只依年／月，「今天」標記
+  // 會停在昨天那列，與快選「1-本日」互相矛盾（2026-09-23 稽核 LOW）
+  const todayKey = localDateStr();
+
   // 檢視的月份若是「現在這個月」，回傳今天的日期，用於高亮與自動捲動
   const todayDay = useMemo(() => {
     const { calendarYear, calendarMonth } = getCalendarYearMonth(
@@ -2652,7 +2781,7 @@ function Dashboard() {
       t.getMonth() + 1 === calendarMonth
       ? t.getDate()
       : null;
-  }, [activeYear, activeMonth]);
+  }, [activeYear, activeMonth, todayKey]);
 
   // 只加總「當月實際存在的天數」，避免隱藏列（如 2 月的 29~31 日）被計入
   const totals = useMemo(() => {
@@ -2666,6 +2795,46 @@ function Dashboard() {
       });
     return { ...base, total: currentChannels.reduce((s, k) => s + base[k], 0) };
   }, [monthData.rows, currentChannels, daysInMonth]);
+
+  // 比值專用的營收（ROAS／MER／廣告佔營收／客單價／日均單量）：只算到 ratioCutoffDay。
+  // 廣告費與 bot 單數都是「月累計至昨日」，老闆白天手 key 的今天進度若算進分子，
+  // 分子分母就不同窗口——ROAS 虛高、客單價偏高，9/21 晚上「廣告佔營收」9.12% 被算成
+  // 8.41% 而沒有標紅（2026-09-23 稽核 MED）。營收 KPI、配速、排名照舊用含今天的 totals
+  // 切點＝min(昨天, 兩支 bot 回報的資料迄日)：清晨 bot 還沒跑時，昨天那列可能是手 key、
+  // 廣告費與單數卻只到前天，只排除今天仍會錯開一天（2026-09-23 修正複查）
+  const ratioCutoffDay = useMemo(() => {
+    if (!todayDay) return null;
+    let cut = todayDay - 1;
+    const ends = [feedDataTo, feedDataToShopee]
+      .map((s) => String(s || "").split("-").map(Number))
+      .filter(([y, m, d]) => y && m && d);
+    if (ends.length === 2) {
+      const [y, m, d] = ends.reduce((a, b) =>
+        a[0] * 10000 + a[1] * 100 + a[2] <= b[0] * 10000 + b[1] * 100 + b[2] ? a : b
+      );
+      const { calendarYear, calendarMonth } = getCalendarYearMonth(
+        activeYear,
+        activeMonth
+      );
+      const endKey = y * 100 + m;
+      const monthKey = calendarYear * 100 + calendarMonth;
+      cut = Math.min(cut, endKey < monthKey ? 0 : endKey > monthKey ? cut : d);
+    }
+    return cut;
+  }, [todayDay, feedDataTo, feedDataToShopee, activeYear, activeMonth]);
+
+  const ratioTotals = useMemo(() => {
+    if (ratioCutoffDay == null) return totals;
+    const base = Object.fromEntries(currentChannels.map((k) => [k, 0]));
+    monthData.rows
+      .filter((r) => r.day <= ratioCutoffDay)
+      .forEach((r) => {
+        currentChannels.forEach((k) => {
+          base[k] += n(r[k]);
+        });
+      });
+    return { ...base, total: currentChannels.reduce((s, k) => s + base[k], 0) };
+  }, [monthData.rows, currentChannels, ratioCutoffDay, totals]);
 
   const chartData = useMemo(() => {
     const factor = 1 + n(targetGrowthRate) / 100;
@@ -2967,6 +3136,13 @@ function Dashboard() {
     remainingCapacity > 0
       ? Math.max(0, Math.ceil(gapToAnnual / remainingCapacity))
       : 0;
+  // 會計年度最後一個月（3 月）進行中：「剩餘需月均」＝差額 ÷（剩餘天數/31），
+  // 3/31 早上會算出三億多的「月均」還被複製進 LINE。這時改講「剩 N 天需日均」
+  const lastFiscalMonth = !!runningMonthTab && fullRemainingMonths === 0;
+  const needDailyAnnual =
+    runningRemainDays > 0
+      ? Math.max(0, Math.ceil(gapToAnnual / runningRemainDays))
+      : 0;
   const avgMonthly =
     effectiveMonthsUsed > 0 ? Math.round(ytd / effectiveMonthsUsed) : 0;
   const monthsLabelDays = Math.max(runningElapsed, runningHasActual ? 1 : 0);
@@ -3003,26 +3179,23 @@ function Dashboard() {
     const channelRoas = Object.fromEntries(
       Object.entries(spendByRevenue).map(([rev, sp]) => [
         rev,
-        ratio(totals[rev] || 0, sp),
+        ratio(ratioTotals[rev] || 0, sp),
       ])
     );
+    const rev = ratioTotals.total;
     return {
       totalSpend,
-      mer: ratio(currentRevenue, totalSpend),
+      mer: ratio(rev, totalSpend),
       web: channelRoas.web ?? null,
       shopee: channelRoas.shopee ?? null,
       channelRoas,
       unattributed,
-      adPct:
-        currentRevenue > 0 && totalSpend > 0
-          ? (totalSpend / currentRevenue) * 100
-          : null,
+      adPct: rev > 0 && totalSpend > 0 ? (totalSpend / rev) * 100 : null,
     };
   }, [
     monthData.adSpend,
     monthData.adChannels,
-    totals,
-    currentRevenue,
+    ratioTotals,
     currentChannels,
   ]);
 
@@ -3089,7 +3262,12 @@ function Dashboard() {
               : `距目標差 ${money(annualTarget - projectedAnnual)}`
           }${
             remainingCapacity > 0
-              ? `，剩餘需月均 ${money(needMonthly)}`
+              ? lastFiscalMonth
+                ? `，剩 ${runningRemainDays} 天需日均 ${money(needDailyAnnual)} 才達年度目標`
+                : `，剩餘需月均 ${money(needMonthly)}`
+              : // 3/31 當天手 key 了進度，剩餘產能雖是 0，但這一天還沒過完，不可宣告「已完整」
+              runningMonthTab
+              ? ""
               : "，全年實績已完整"
           }。`,
           `${activeMonth}${
@@ -3174,6 +3352,8 @@ function Dashboard() {
   const lastDataDay = _isRunningMonth(activeMonth) ? runningElapsed : effRangeEnd;
   const rangeIncomplete =
     _isRunningMonth(activeMonth) && effRangeEnd > lastDataDay;
+  // 區間內「還沒發生」的天數：要扣掉起日，否則選 25-30 日時會說「含 27 天未發生」
+  const rangeMissingDays = effRangeEnd - Math.max(lastDataDay, effRangeStart - 1);
 
   const rangeStats = useMemo(() => {
     const prevYearKey = String(Number(activeYear) - 1);
@@ -3256,8 +3436,14 @@ function Dashboard() {
       today.getMonth() === calendarMonth - 1;
     const lastFlaggableDay =
       monthStart > today ? 0 : isCurrentMonth ? today.getDate() - 1 : daysInMonth;
+    // 進行中月份的「今天」那列是老闆手 key 到一半的進度（拍板 #3），不是完整的一天：
+    // 不可拿來打「異常低／異常高」，也不可拉低其他天的比較基準（14 個早上有 3 個被誤標）
     const dailyTotals = monthData.rows
-      .filter((r) => r.day <= daysInMonth)
+      .filter(
+        (r) =>
+          r.day <= daysInMonth &&
+          !(isCurrentMonth && Number(r.day) >= today.getDate())
+      )
       .map((row) => ({
         day: row.day,
         isOff: !!dayInfo[row.day]?.isOff,
@@ -3296,6 +3482,7 @@ function Dashboard() {
     activeYear,
     activeMonth,
     dayInfo,
+    todayKey,
   ]);
 
   // 月份頁籤資料指示點：該月任一儲存格有值就亮
@@ -3374,9 +3561,19 @@ function Dashboard() {
   // 空白格略過不覆寫，超出當月天數或通路數的部分自動丟棄
   const handleCellPaste = (day, startKey) => (e) => {
     const text = e.clipboardData?.getData("text") ?? "";
-    if (!/[\n\t]/.test(text.trim())) return; // 單一數值走預設貼上
+    // 只去掉結尾一個換行（Excel 複製必帶），不可整段 trim：範圍開頭的空白格
+    // （\r\n、\t）是「往下／往右位移」的一部分，trim 掉數字就落到錯的日子或通路
+    const body = text.replace(/\r/g, "").replace(/\n$/, "");
+    if (!/[\n\t]/.test(body)) {
+      // 單一數值也走 parsePastedNumber：預設貼上會被 setRowValue 刪掉小數點與 E+，
+      // 「1.5E+04」變 1504、「1234.6」變 12346（2026-09-23 稽核 MED）
+      e.preventDefault();
+      const v = parsePastedNumber(body);
+      if (v !== null) setRowValue(day, startKey, v);
+      return;
+    }
     e.preventDefault();
-    const lines = text.replace(/\r/g, "").split("\n");
+    const lines = body.split("\n");
     while (lines.length && lines[lines.length - 1].trim() === "") lines.pop();
     if (!lines.length) return;
     const startCol = currentChannels.indexOf(startKey);
@@ -3478,6 +3675,11 @@ function Dashboard() {
     const file = e.target.files?.[0];
     e.target.value = "";
     if (!file) return;
+    if (!hydratedRef.current) {
+      // 還沒讀到雲端就匯入：伺服器快照一到會把匯入內容整份蓋掉，而且完全沒寫出去
+      window.alert("尚未取得雲端資料（離線或連線中），請連上後再匯入備份。");
+      return;
+    }
     const reader = new FileReader();
     reader.onload = () => {
       try {
@@ -3500,11 +3702,17 @@ function Dashboard() {
         setHistVer((v) => v + 1);
         dirtyRef.current = true;
         fullWriteRef.current = true;
-        setAllYears(sanitizeAllYears(parsed.allYears));
+        const importedYears = sanitizeAllYears(parsed.allYears);
+        // 匯入的每個有資料的月份都登記成未上雲：整份 setDoc 在離線時會一直排隊，
+        // 這時關頁若清單是空的，重開後匯入內容會被雲端舊資料無聲蓋掉
+        Object.entries(importedYears).forEach(([y, months]) =>
+          Object.entries(months || {}).forEach(([m, mv]) => {
+            if (monthHasData(mv)) dirtyMonthsRef.current.add(`${y}::${m}`);
+          })
+        );
+        setAllYears(importedYears);
         if (parsed.targetGrowthRate != null) {
-          setTargetGrowthRate(
-            String(parsed.targetGrowthRate).replace(/[^0-9]/g, "") || "5"
-          );
+          setTargetGrowthRate(sanitizeRate(parsed.targetGrowthRate) || "5");
         }
       } catch (err) {
         console.error(err);
@@ -3558,20 +3766,28 @@ function Dashboard() {
     }, 250);
   };
 
+  // 日均單量的天數與 bot 單數同窗口（至昨日）：排除今天那列（見 ratioTotals 註解）
   const activeDaysWithRevenue = monthData.rows.filter(
-    (row) => row.day <= daysInMonth && rowTotal(row, currentChannels) > 0
+    (row) =>
+      row.day <= daysInMonth &&
+      (ratioCutoffDay == null || row.day <= ratioCutoffDay) &&
+      rowTotal(row, currentChannels) > 0
   ).length;
 
   // 訂單數：未填寫時以「營收 ÷ 10,000」推估（以 placeholder 呈現，不冒充實際值），
-  // 列表顯示與總計使用同一套邏輯
+  // 列表顯示與總計使用同一套邏輯。客單價（AOV）的分子用 ratioTotals（至昨日），
+  // 與 bot 寫的單數同窗口
   const orderInfos = currentChannels.map((key) => {
     const amount = totals[key] || 0;
+    const ratioAmount = ratioTotals[key] || 0;
     const ov = monthData.orderOverrides?.[key];
     const hasOverride = ov !== undefined && String(ov).trim() !== "";
-    const estimate = Math.max(Math.round(amount / 10000), 0);
+    // 推估也用至昨日的營收，跟客單價分子同窗口（否則今天手 key 會出現「≈1 單・AOV $0」）
+    const estimate = Math.max(Math.round(ratioAmount / 10000), 0);
     return {
       key,
       amount,
+      ratioAmount,
       hasOverride,
       estimate,
       count: hasOverride ? n(ov) : estimate,
@@ -3589,7 +3805,7 @@ function Dashboard() {
       : "0.0";
   const avgOrderValueAllChannels =
     totalOrdersAllChannels > 0
-      ? `$${num(Math.round(currentRevenue / totalOrdersAllChannels))}`
+      ? `$${num(Math.round(ratioTotals.total / totalOrdersAllChannels))}`
       : "$0";
   const yoyMuted = currentRevenue === 0;
   const targetMuted = currentRevenue === 0;
@@ -5449,7 +5665,7 @@ function Dashboard() {
                     <div className="summary-inline">
                       <input
                         type="text"
-                        inputMode="numeric"
+                        inputMode="decimal"
                         value={targetGrowthRate}
                         onChange={(e) => changeGrowthRate(e.target.value)}
                         className="input"
@@ -5485,13 +5701,21 @@ function Dashboard() {
                       年度配速
                     </div>
                     <div className="summary-value soft">
-                      {remainingCapacity > 0 ? money(needMonthly) : "全年已齊"}
+                      {remainingCapacity > 0
+                        ? money(lastFiscalMonth ? needDailyAnnual : needMonthly)
+                        : runningMonthTab
+                        ? "最後一天"
+                        : "全年已齊"}
                     </div>
                     <div className="summary-note">
                       {remainingCapacity > 0
-                        ? `剩 ${remainLabel}需月均 · 月均（進度折算）${money(
-                            avgMonthly
-                          )}`
+                        ? lastFiscalMonth
+                          ? `年度最後一個月：剩 ${runningRemainDays} 天需日均（達年度目標）`
+                          : `剩 ${remainLabel}需月均 · 月均（進度折算）${money(
+                              avgMonthly
+                            )}`
+                        : runningMonthTab
+                        ? "年度最後一天，見本月配速"
                         : "12 個月實績已完整"}
                     </div>
                     {annualTarget > 0 && ytd > 0 && (
@@ -5720,8 +5944,8 @@ function Dashboard() {
                             </div>
                             <div className="cost-sub">
                               佔營收{" "}
-                              {currentRevenue
-                                ? ((numeric / currentRevenue) * 100).toFixed(1)
+                              {ratioTotals.total
+                                ? ((numeric / ratioTotals.total) * 100).toFixed(1)
                                 : "0.0"}
                               %
                               {(() => {
@@ -5982,7 +6206,7 @@ function Dashboard() {
                   <div className="order-list">
                     {orderInfos.map((o) => {
                       const aov =
-                        o.count > 0 ? Math.round(o.amount / o.count) : 0;
+                        o.count > 0 ? Math.round(o.ratioAmount / o.count) : 0;
                       const isFixed = FIXED_CHANNELS.some(
                         (c) => c.key === o.key
                       );
@@ -6124,6 +6348,14 @@ function Dashboard() {
 
               {/* Table Area */}
               <div style={{ minWidth: 0 }}>
+                {preHydrateBlocked && !hydrated && (
+                  <div className="auto-warn" role="status">
+                    <AlertTriangle size={14} />
+                    <span>
+                      尚未取得雲端資料（離線或連線中），暫時不能編輯；連上後會自動解鎖。
+                    </span>
+                  </div>
+                )}
                 {autoEditNotice && (
                   <div className="auto-warn" role="status">
                     <AlertTriangle size={14} />
@@ -6288,11 +6520,11 @@ function Dashboard() {
                       <div
                         className="range-chip"
                         title={`本月資料只到 ${lastDataDay} 日，選取區間含 ${
-                          effRangeEnd - lastDataDay
+                          rangeMissingDays
                         } 天尚無資料；右側去年同期／上月同區間是照 ${effRangeStart}–${effRangeEnd}日 完整比對，故年增偏低屬正常`}
                       >
                         ⚠ 本月資料至 {lastDataDay} 日（區間含{" "}
-                        {effRangeEnd - lastDataDay} 天未發生）
+                        {rangeMissingDays} 天未發生）
                       </div>
                     )}
                     <div className="range-chip">
