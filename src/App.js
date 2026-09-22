@@ -2423,7 +2423,7 @@ function Dashboard() {
   const removeAdChannel = (key) => {
     if (AUTO_AD_KEYS.includes(key)) {
       window.alert(
-        "Google／Meta／蝦皮廣告費由自動餵數維護，無法刪除——每日凌晨寫入、07:31 回刷，" +
+        "Google／Meta／蝦皮廣告費由自動餵數維護，無法刪除——每天早上 07:30 寫入昨日並回刷近 14 天，" +
           "刪除後仍會被寫回，反而變成看不見的隱形花費。"
       );
       return;
@@ -5244,9 +5244,9 @@ function Dashboard() {
             <div className="month-start-hint">
               <span>
                 {_today.getDate() === 1
-                  ? `${activeMonth}剛開始，今晚 00:30 自動餵數會補入第一天——先回顧上個月的收官？`
+                  ? `${activeMonth}剛開始，第一天的數據明早 07:30 自動餵數後入帳——先回顧上個月的收官？`
                   : currentRevenue === 0
-                  ? `${activeMonth} 第一天的數據應已在 00:30 入帳，目前仍是空的——請先看右上餵數徽章。上月收官在這 →`
+                  ? `${activeMonth} 第一天的數據每天早上 07:30 入帳；過了 07:30 仍是空的就看右上餵數徽章。上月收官在這 →`
                   : `${activeMonth}才開始幾天——月初回報用上月收官數字 →`}
               </span>
               <button type="button" className="btn-add" onClick={jumpToPrevMonth}>
@@ -5748,7 +5748,7 @@ function Dashboard() {
                   {deferredDonutData.length === 0 ? (
                     <div className="pie-empty">
                       本月尚無營收資料
-                      <span>網店/POS/蝦皮由自動餵數每日凌晨寫入昨日資料</span>
+                      <span>網店/POS/蝦皮由自動餵數每天早上 07:30 寫入昨日資料</span>
                     </div>
                   ) : (
                   <ResponsiveContainer width="100%" height="100%">
@@ -5781,7 +5781,7 @@ function Dashboard() {
                   {donutData.length === 0 && (
                     <div className="rank-empty">
                       本月還沒有任何通路營收——網店/POS/蝦皮與廣告費由自動餵數
-                      每日凌晨寫入昨日資料（07:31 再回刷校正），這裡會即時排出通路占比。
+                      每天早上 07:30 寫入昨日資料（同時回刷近 14 天校正），這裡會即時排出通路占比。
                     </div>
                   )}
                   {donutData.map((item, i) => (
@@ -6361,7 +6361,7 @@ function Dashboard() {
                     <AlertTriangle size={14} />
                     <span>
                       網店／POS／蝦皮／Google／Meta 由自動餵數維護：手動修改的值會在
-                      次日凌晨被校正回 API 真值。MOMO／其他通路仍需手動維護。
+                      次日早上 07:30 被校正回 API 真值。MOMO／其他通路仍需手動維護。
                     </span>
                     <button type="button" onClick={() => setAutoEditNotice(false)}>
                       知道了
@@ -6625,7 +6625,7 @@ function Dashboard() {
                               {(ch.key === "web" || ch.key === "pos") && (
                                 <span
                                   className="auto-chip"
-                                  title="由自動餵數維護（每日凌晨寫入昨日、07:31 回刷），手動修改會在次日被校正"
+                                  title="由自動餵數維護（每天早上 07:30 寫入昨日並回刷近 14 天），手動修改會在次日被校正"
                                 >
                                   自動
                                 </span>
