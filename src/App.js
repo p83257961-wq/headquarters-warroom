@@ -1198,18 +1198,28 @@ const LABELS = {
   web: "網店",
   shopee: "蝦皮",
   momo: "MOMO",
+  pchome: "PChome",
+  // coupang／pinkoi 是老闆手動新增的通路（key 是小寫），顯示時補上正式大小寫，
+  // 才不會跟隔壁的 PChome／MOMO 一高一低（2026-11-13）。只改顯示，key 與資料不動
+  coupang: "Coupang",
+  pinkoi: "Pinkoi",
   other: "其他",
   fb: "Meta",
   google: "Google",
 };
 
 // 通路色票：深淺色各一套（淺色版沿用暖色調低飽和色，深色版用高對比亮色）
+// pchome／coupang／pinkoi 給固定色（2026-10-23）：原本這幾個走 CHANNEL_FALLBACK 依「排序位置」
+// 配色，插入新通路後整排顏色會位移，而且 coupang 撞 MOMO 紫、pinkoi 撞 POS 黃
 const CHANNEL_COLORS = {
   dark: {
     pos: "#FBBF24",
     web: "#38BDF8",
     shopee: "#EF4444",
     momo: "#A78BFA",
+    pchome: "#FB923C",
+    coupang: "#2DD4BF",
+    pinkoi: "#F472B6",
     other: "#8FA3BE",
     fb: "#3B82F6",
     google: "#10B981",
@@ -1219,6 +1229,9 @@ const CHANNEL_COLORS = {
     web: "#4A7FA5",
     shopee: "#A63228",
     momo: "#6B5B8A",
+    pchome: "#B5652B",
+    coupang: "#2F7F77",
+    pinkoi: "#A8557A",
     other: "#77777D",
     fb: "#4A7FA5",
     google: "#2D6A4F",
@@ -1282,6 +1295,17 @@ const colorOf = (k, i = 0, theme = "dark") => {
   const fallback = CHANNEL_FALLBACK[theme] || CHANNEL_FALLBACK.dark;
   return palette[k] || fallback[i % fallback.length];
 };
+
+// 通路色拿來「當文字」時的版本（表頭、頁尾合計）。色票本身是給色塊／長條用的，
+// 圖形 3:1 就夠；同一個顏色寫成 10–13px 的字要 4.5:1，量出來有三個不夠：
+//   淺色 網店 #4A7FA5 → 3.82、淺色 POS #8A6A2E → 4.45、深色 蝦皮 #EF4444 → 3.93
+// 這裡只加深／提亮這三個，色相不變；色塊與圖表照舊用 colorOf（2026-11-13）
+const CHANNEL_TEXT_COLORS = {
+  dark: { shopee: "#F87171" },
+  light: { web: "#3A6B8F", pos: "#7A5C22" },
+};
+const textColorOf = (k, i = 0, theme = "dark") =>
+  CHANNEL_TEXT_COLORS[theme]?.[k] || colorOf(k, i, theme);
 
 // 回音判斷（updatedBy === 自己）必須以「分頁」為單位：原本整個瀏覽器共用 localStorage
 // 裡同一個 id，同一瀏覽器的兩個分頁會把對方的寫入當成自己的回音——成長率不套用、
@@ -1919,7 +1943,7 @@ function SectionHeader({ icon: Icon, title, desc, right }) {
       <div>
         <div className="section-title-row">
           <Icon size={15} />
-          <h3>{title}</h3>
+          <h2>{title}</h2>
         </div>
         <p>{desc}</p>
       </div>
@@ -2081,11 +2105,26 @@ function Dashboard() {
   // 月份列是橫向捲動的（12 顆放不下一行）：手機上「9月」會停在畫面外，
   // 看起來像沒有在選中的月份。切月時把作用中那顆捲到中間——只動容器的 scrollLeft，
   // 不用 scrollIntoView（那個會連帶把整頁往下捲到表格）。
+  // 視窗「寬度」變了也要重新置中（手機轉橫、桌機拉窄視窗）：置中位置是用當下的容器寬算的，
+  // 寬度一變，作用中的月份又會跑到畫面外。只看寬度——手機捲動時網址列收合也會觸發 resize
+  // （只有高度變），那種情況不能動，否則使用者自己橫捲去看別的月份會被拉回來（2026-11-13）。
   useEffect(() => {
-    const wrap = document.querySelector(".toolbar-left");
-    const el = wrap?.querySelector(".tab-btn.active");
-    if (!wrap || !el) return;
-    wrap.scrollLeft = el.offsetLeft - wrap.clientWidth / 2 + el.offsetWidth / 2;
+    const center = () => {
+      const wrap = document.querySelector(".toolbar-left");
+      const el = wrap?.querySelector(".tab-btn.active");
+      if (!wrap || !el) return;
+      wrap.scrollLeft =
+        el.offsetLeft - wrap.clientWidth / 2 + el.offsetWidth / 2;
+    };
+    center();
+    let lastWidth = window.innerWidth;
+    const onResize = () => {
+      if (window.innerWidth === lastWidth) return;
+      lastWidth = window.innerWidth;
+      center();
+    };
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
   }, [activeMonth, activeYear]);
 
   // 分頁名稱：宿主頁面預設叫「React」，手機分頁列／書籤只看得到那四個字。
@@ -3783,7 +3822,10 @@ function Dashboard() {
     const ov = monthData.orderOverrides?.[key];
     const hasOverride = ov !== undefined && String(ov).trim() !== "";
     // 推估也用至昨日的營收，跟客單價分子同窗口（否則今天手 key 會出現「≈1 單・AOV $0」）
-    const estimate = Math.max(Math.round(ratioAmount / 10000), 0);
+    // 有營收就至少 1 單：小通路單月只有幾千元（例 pinkoi 4,595）四捨五入會變 0，
+    // 畫面變成「有營收、0 單」（2026-11-13）
+    const estimate =
+      ratioAmount > 0 ? Math.max(Math.round(ratioAmount / 10000), 1) : 0;
     return {
       key,
       amount,
@@ -3822,7 +3864,10 @@ function Dashboard() {
           --bg-hover: #1E2F4A;
           --border: rgba(255,255,255,0.06);
           --border-bright: rgba(255,255,255,0.12);
-          --gold: #3B82F6;
+          /* 2026-11-13：#3B82F6 當文字只有 3.3–4.0:1（年月選單、區塊標題、小計、今天列），
+             提亮到 #60A5FA（面板 6.5／次層 5.8／今天列 5.6）。壓在這個底色上的字用 --on-gold */
+          --gold: #60A5FA;
+          --on-gold: #0D1520;
           --gold-dim: #60A5FA;
           --gold-glow: rgba(59,130,246,0.12);
           --gold-bright: #60A5FA;
@@ -3831,7 +3876,7 @@ function Dashboard() {
           --text-dim: #8296B3; /* 深色輔助字：實測對比 ≥4.8:1（原 #6B7F9E 只有 3.6） */
           --green: #10B981;
           --green-dim: rgba(16,185,129,0.12);
-          --red: #EF4444;
+          --red: #F87171; /* 原 #EF4444 當文字 3.9–4.4:1，提亮後 6.0／5.3 */
           --red-dim: rgba(239,68,68,0.12);
           --blue: #38BDF8;
           --blue-dim: rgba(56,189,248,0.12);
@@ -3849,6 +3894,7 @@ function Dashboard() {
           --border: rgba(28,28,30,0.08);
           --border-bright: rgba(28,28,30,0.14);
           --gold: #1C1C1E;
+          --on-gold: #FFFFFF;
           --gold-dim: #5C5C60;
           --gold-glow: rgba(28,28,30,0.05);
           --gold-bright: #1C1C1E;
@@ -3859,7 +3905,7 @@ function Dashboard() {
           --green-dim: rgba(45,106,79,0.07);
           --red: #A63228;
           --red-dim: rgba(166,50,40,0.07);
-          --blue: #4A7FA5;
+          --blue: #3A6B8F; /* 只當文字用（同步中／待今晨補數）；原 #4A7FA5 在淡藍底上 3.7:1，加深後 4.8 */
           --blue-dim: rgba(74,127,165,0.07);
           --shadow-card: 0 1px 0 rgba(28,28,30,0.06), 0 1px 3px rgba(28,28,30,0.03);
           --table-border: rgba(28,28,30,0.06);
@@ -3973,7 +4019,9 @@ function Dashboard() {
           background: var(--bg-surface);
           min-height: 40px;
         }
-        .sync-time { opacity: .5; }
+        /* 原本 opacity:.5 → 淺色 2.1:1、深色 2.6:1，時間幾乎讀不到。
+           改用字重區分主次（狀態 600、時間 400），顏色不再打折 */
+        .sync-time { font-weight: 400; }
         .sync-idle { color: var(--text-dim); }
         .sync-syncing { color: var(--blue); border-color: rgba(56,189,248,0.3); background: var(--blue-dim); }
         .sync-synced { color: var(--green); border-color: rgba(16,185,129,0.3); background: var(--green-dim); }
@@ -4046,7 +4094,7 @@ function Dashboard() {
         .section-card { padding: 22px; min-width: 0; }
         .section-header { display: flex; justify-content: space-between; gap: 16px; align-items: flex-start; margin-bottom: 16px; }
         .section-title-row { display: flex; align-items: center; gap: 8px; color: var(--gold); }
-        .section-title-row h3 { margin: 0; font-size: 15px; font-weight: 800; color: var(--text-primary); }
+        .section-title-row h2 { margin: 0; font-size: 15px; font-weight: 800; color: var(--text-primary); }
         .section-header p { margin: 5px 0 0; font-size: 12px; color: var(--text-dim); font-family: 'DM Mono', monospace; }
 
         /* 自動/手動欄位標示與提醒 */
@@ -4110,7 +4158,7 @@ function Dashboard() {
         .tab-btn:hover { background: var(--bg-hover); color: var(--text-secondary); border-color: var(--border-bright); }
         .tab-btn.active {
           background: var(--gold);
-          color: #FFFFFF;
+          color: var(--on-gold);
           border-color: var(--gold);
         }
         .tab-dot {
@@ -4377,7 +4425,7 @@ function Dashboard() {
           padding: 22px; border-bottom: 1px solid var(--border);
         }
         .big-header-title { display: flex; align-items: center; gap: 10px; }
-        .big-header-title h3 {
+        .big-header-title h2 {
           margin: 0;
           font-size: 28px; font-weight: 900; letter-spacing: -0.03em;
         }
@@ -4398,6 +4446,8 @@ function Dashboard() {
         }
 
         .work-grid { display: grid; grid-template-columns: 310px minmax(0,1fr); gap: 20px; padding: 22px; }
+        /* 左欄（廣告投放＋訂單管理）。原本寫在 inline style，平板層要改排法才搬進來 */
+        .work-side { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
 
         /* ── Sidebar ── */
         .sidebar-box {
@@ -4440,8 +4490,13 @@ function Dashboard() {
         .btn-add:disabled:hover { background: var(--bg-surface); border-color: var(--border); }
 
         .orders-head { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-bottom: 14px; }
+        /* 每一列都是獨立的 grid：欄寬若讓內容決定（fr 的下限是內容寬、最後一欄 auto），
+           各列會各算各的——表頭最後一欄是空的（0px）、資料列是 28px，「ORDERS／AOV」
+           兩個欄名就比底下的格子偏右 10–20px；客單價位數多的那列又比別列寬 3px。
+           改成固定比例＋最後一欄定寬，表頭與每一列才會對在同一條線上（2026-11-13） */
         .orders-table-head, .order-row {
-          display: grid; grid-template-columns: 1.15fr 1fr 1fr auto;
+          display: grid;
+          grid-template-columns: minmax(0,1.15fr) minmax(0,1fr) minmax(0,1fr) 30px;
           gap: 10px; align-items: center;
         }
         .orders-table-head {
@@ -4457,8 +4512,10 @@ function Dashboard() {
           background: var(--bg-deep);
           border: 1px solid var(--border);
           display: flex; align-items: center; justify-content: center;
-          font-family: 'DM Mono', monospace;
+          /* 內容是中文「固定」：等寬字型沒有中文字，會掉到系統等寬中文字型而變寬、折成兩行 */
+          font-family: 'Noto Sans TC', sans-serif;
           font-size: 10px; color: var(--text-dim); font-weight: 700;
+          white-space: nowrap; cursor: default;
         }
 
         .orders-stats {
@@ -4507,6 +4564,24 @@ function Dashboard() {
           font-weight: 700; color: var(--gold); cursor: pointer;
         }
         .field-box select option { background: var(--bg-surface); color: var(--text-primary); }
+        /* 旁邊已經有自繪箭頭（ChevronDown）的下拉：拿掉瀏覽器原生的那顆，否則一個選單兩個箭頭
+           （原本只在手機層處理，桌機一直是雙箭頭，2026-11-13 改成全寬度一致）。
+           自繪箭頭是獨立的 svg，點它本來不會開選單——把下拉的可點範圍用 padding 往右延伸、
+           再用負 margin 收回版位，蓋住箭頭；箭頭本身設成不吃點擊。
+           :has() 不支援的舊瀏覽器整組略過，退回原生雙箭頭，功能不受影響 */
+        .field-box select:has(+ svg),
+        .selector-row select:has(+ svg) {
+          appearance: none; -webkit-appearance: none;
+          flex: 1 1 auto;
+          padding-right: 24px; margin-right: -24px;
+          position: relative; z-index: 1;
+        }
+        .field-box select:has(+ svg) + svg,
+        .selector-row select:has(+ svg) + svg { pointer-events: none; flex: 0 0 auto; }
+        /* 去掉原生箭頭後，下拉的字寬＝最長選項的字寬、一點餘裕都沒有（年份 4 碼 38.4px）。
+           字型晚一步載入或瀏覽器進位不同就會切掉尾巴（手機上看過顯示成「20」）。
+           下限＝4 碼＋6px 餘裕＋上面那 24px 右內距 */
+        .field-box select:has(+ svg) { min-width: calc(4ch + 30px); }
         .field-box input { min-width: 90px; font-family: 'DM Mono', monospace; font-size: 12px; }
         .field-box input::placeholder { color: var(--text-dim); }
 
@@ -4739,7 +4814,7 @@ function Dashboard() {
           font-weight: 600;
           color: #9CA3AF;
         }
-        .tooltip-label.sec { color: #6B7280; }
+        .tooltip-label.sec { color: #8B93A1; } /* 原 #6B7280 在 #1A2840 上只有 3.1:1 */
         .tooltip-val {
           font-family: 'DM Mono', monospace;
           font-size: 14px;
@@ -4775,7 +4850,7 @@ function Dashboard() {
           font-family: 'DM Mono', monospace;
           font-size: 15px;
           font-weight: 800;
-          color: #F87171;
+          color: #FCA5A5; /* 原 #F87171 疊在自己的淡紅底上只有 4.05:1 */
           background: rgba(248,113,113,0.12);
           padding: 3px 10px;
           border-radius: 8px;
@@ -4801,12 +4876,12 @@ function Dashboard() {
         }
         .anomaly-badge.low {
           background: rgba(239,68,68,0.12);
-          color: #EF4444;
+          color: #F87171;
           border: 1px solid rgba(239,68,68,0.2);
         }
         .anomaly-badge.zero {
           background: rgba(130,150,179,0.12);
-          color: #8296B3;
+          color: #9FB0C9;
           border: 1px solid rgba(130,150,179,0.2);
         }
         .anomaly-badge.today {
@@ -4814,9 +4889,9 @@ function Dashboard() {
           color: var(--gold);
           border: 1px solid var(--border-bright);
         }
-        [data-theme="light"] .anomaly-badge.spike { background: rgba(138,106,46,0.08); color: #8A6A2E; border-color: rgba(138,106,46,0.2); }
+        [data-theme="light"] .anomaly-badge.spike { background: rgba(138,106,46,0.08); color: #7A5C22; border-color: rgba(138,106,46,0.2); }
         [data-theme="light"] .anomaly-badge.low { background: rgba(166,50,40,0.07); color: #A63228; border-color: rgba(166,50,40,0.18); }
-        [data-theme="light"] .anomaly-badge.zero { background: rgba(28,28,30,0.05); color: #77777D; border-color: rgba(28,28,30,0.1); }
+        [data-theme="light"] .anomaly-badge.zero { background: rgba(28,28,30,0.05); color: #5C5C60; border-color: rgba(28,28,30,0.1); }
 
         tr.row-spike { background: rgba(251,191,36,0.04); }
         tr.row-low { background: rgba(239,68,68,0.03); }
@@ -4847,7 +4922,7 @@ function Dashboard() {
           .page-title { font-size: 32px; }
           .kpi-value { font-size: 32px; }
           .summary-value { font-size: 24px; }
-          .big-header-title h3 { font-size: 22px; }
+          .big-header-title h2 { font-size: 22px; }
           .big-revenue { font-size: 28px; }
           .ad-grid { grid-template-columns: 1fr; }
           .grid-3 { grid-template-columns: 1fr; }
@@ -4855,6 +4930,10 @@ function Dashboard() {
           /* 手機加大可點面積（接近 44px 觸控標準）——
              複合選擇器版本補齊 specificity，避免被桌機規則蓋掉 */
           .icon-btn { padding: 11px; }
+          /* 刪除鍵加大到 37px 後，訂單面板最後一欄（桌機定寬 30px）要跟著放寬，否則鍵會凸出列外 3px */
+          .orders-table-head, .order-row {
+            grid-template-columns: minmax(0,1.15fr) minmax(0,1fr) minmax(0,1fr) 38px;
+          }
           .tab-btn { padding: 11px 14px; }
           .range-bar .tab-btn { padding: 11px 14px; font-size: 12px; }
           .btn-add { padding: 11px 12px; }
@@ -4921,7 +5000,7 @@ function Dashboard() {
 
         /* ── Light mode overrides ──
            大部分顏色由 CSS 變數自動切換，這裡只留變數蓋不到的例外 */
-        [data-theme="light"] .exec-pill.warn { background: rgba(138,106,46,0.1); border-color: rgba(138,106,46,0.25); color: #8A6A2E; }
+        [data-theme="light"] .exec-pill.warn { background: rgba(138,106,46,0.1); border-color: rgba(138,106,46,0.25); color: #7A5C22; }
         [data-theme="light"] .exec-pill.good { border-color: rgba(45,106,79,0.25); }
         [data-theme="light"] .stat-soft.accent-amber::before { background: #8A6A2E; }
         [data-theme="light"] .stat-soft.accent-blue::before { background: #4A7FA5; }
@@ -4947,6 +5026,56 @@ function Dashboard() {
         /* ── Recharts text ── */
         [data-theme="dark"] .recharts-text { fill: #8296B3 !important; font-family: 'DM Mono', monospace !important; }
         [data-theme="light"] .recharts-text { fill: #64646B !important; font-family: 'DM Mono', monospace !important; }
+
+        /* ── 平板／半寬視窗（601–1280px）── 2026-11-13
+           上面 ≤1280 的規則把每個區塊都壓成單欄，但 600px 以上其實放得下多欄：
+           1024px 時整頁 6,108px 高（1440px 只有 2,910px），三張 KPI、四張統計卡、
+           七列通路排名全部一張佔一整行，要捲兩倍的距離才看得到每日表格。
+           這一層只把「量過放得下」的區塊排回多欄。每一段都同時有下限（≥601）與上限（≤1280）
+           ——手機（≤600）與桌機（≥1281）一條規則都不受影響（wr_app_css_check.mjs 會擋）。 */
+        @media (min-width: 601px) and (max-width: 1280px) {
+          /* 趨勢圖下方四張統計卡：先 2×2（≥901 再排成一列四張） */
+          .right-stack {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 12px;
+          }
+          /* 營收結構：甜甜圈在左、通路排名在右（原本上下疊，光這塊就 689px） */
+          .pie-layout { grid-template-columns: 240px minmax(0, 1fr); align-items: start; }
+          /* 廣告投放：≤900 被壓成一張佔一行，全寬時三欄放得下 */
+          .ad-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+        }
+        @media (min-width: 601px) and (max-width: 900px) {
+          /* KPI 跟手機同一套階層：年度累計獨佔一行，當月營收與年度目標並排 */
+          .grid-3 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+          .grid-3 > :first-child { grid-column: 1 / -1; }
+        }
+        @media (min-width: 761px) and (max-width: 1280px) {
+          /* 廣告投放與訂單管理並排（原本上下疊 916px）。761px 起每欄 ≥325px，
+             比桌機的側欄（310px）還寬，內容照桌機的排法放得下 */
+          .work-side {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            align-items: start;
+          }
+          .ad-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+        }
+        @media (min-width: 901px) and (max-width: 1280px) {
+          /* KPI 三張一排。卡寬 269–395px、內寬 225–351px；
+             最長的「$25,069,309」11 碼在 42px 要 277px，所以字級跟著視窗寬縮
+             （901 → 28.8px、1280 → 41px，接上桌機的 42px） */
+          .grid-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+          .kpi-value { font-size: clamp(26px, 3.2vw, 41px); }
+          /* 統計卡四張一排；每張內寬最窄 161px，24px 的「-$1,949,427」要 158px 太貼，收到 22px */
+          .right-stack { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+          .stat-value { font-size: 22px; }
+          /* 通路排名兩欄（右側寬度 ≥546px） */
+          .rank-list {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 6px; align-content: start;
+          }
+        }
 
         /* ── 手機（≤600px）── 老闆 2026-09-04 指定：「手機不需要的可以省略、
            電腦版不動、只是要更方便觀看」。手機是「看」的場景（輸入都在桌機做，
@@ -4986,11 +5115,16 @@ function Dashboard() {
              FX 標記（代表該通路不可刪）在刪除鍵藏起來後就沒有意義了 */
           .icon-btn,
           .fixed-badge { display: none; }
-          /* field-box 的下拉在手機會出現兩個箭頭（原生箭頭＋自繪 ChevronDown）。
-             只砍「後面真的跟著一顆自繪箭頭」的那些——區間自訂的兩個 select 沒有配圖示，
-             一律砍會讓它們看起來不像下拉。:has() 不支援時規則整條略過，退回雙箭頭無害 */
-          .field-box select:has(+ svg),
-          .selector-row select:has(+ svg) { appearance: none; -webkit-appearance: none; }
+          /* 訂單面板第四欄（刪除鍵／固定標記）在手機整欄是空的，連欄位一起收掉，
+             寬度還給單數與客單價（第四格的 display:flex 寫在 inline，要 !important） */
+          .orders-table-head, .order-row {
+            grid-template-columns: minmax(0,1.15fr) minmax(0,1fr) minmax(0,1fr);
+          }
+          .orders-table-head > :nth-child(4),
+          .order-row > :nth-child(4) { display: none !important; }
+          /* 雙箭頭（原生箭頭＋自繪 ChevronDown）與寬度下限已在上面的全域規則處理（:has(+ svg)）。
+             手機的月份列是橫向捲動的，這裡再禁止年份下拉被同排擠壓 */
+          .field-box select:has(+ svg) { flex: 0 0 auto; }
           /* KPI 小字只砍純裝飾的兩張（FISCAL YEAR TOTAL／ANNUAL TARGET）；
              中間那張是「含今日進度／至昨日」＝資料到哪天的口徑，手機更要留著 */
           .kpi-card.primary .kpi-helper,
@@ -5041,7 +5175,9 @@ function Dashboard() {
           .grid-3 > :first-child { grid-column: 1 / -1; }
           /* 並排那兩張的欄寬只有 141px：月營收旺季會到 $4,500,000（28px 需 168px），
              所以字級收到 22px（需 132px）＋圖示縮小讓標題留得住一行 */
-          .grid-3 > :not(:first-child) .kpi-value { font-size: 22px; }
+          /* 320px 的手機欄寬再少 28px，22px 的「$3,003,755」會被切掉 7px → 跟著螢幕寬縮
+             （320 → 18.9px、373 以上 → 22px） */
+          .grid-3 > :not(:first-child) .kpi-value { font-size: clamp(18px, 5.9vw, 22px); }
           .grid-3 > :not(:first-child) .kpi-card,
           .grid-3 > :not(:first-child) { padding: 14px; }
           .grid-3 > :not(:first-child) .icon-box { width: 28px; height: 28px; }
@@ -5058,7 +5194,9 @@ function Dashboard() {
           }
           .stat-soft { padding: 10px 10px 10px 12px; }
           .stat-label { font-size: 11px; gap: 5px; }
-          .stat-value { margin-top: 6px; font-size: 18px; }
+          /* 18px 在 375 以上剛好；320px 的手機欄寬只剩 110px，「-$1,949,427」會折成兩行，
+             所以跟著螢幕寬度縮（320 → 15.4px、375 以上 → 18px） */
+          .stat-value { margin-top: 6px; font-size: clamp(15px, 4.8vw, 18px); }
           .stat-note { margin-top: 4px; font-size: 10px; line-height: 1.45; }
 
           /* 同一類型（全寬直排、內容其實塞得下兩欄）另外兩處，09-07 一起收：
@@ -5070,11 +5208,26 @@ function Dashboard() {
             grid-template-columns: repeat(2, minmax(0, 1fr));
             gap: 6px;
           }
-          .rank-item { padding: 9px 10px; gap: 6px; }
-          .rank-num { width: 22px; height: 22px; font-size: 10px; border-radius: 6px; }
+          /* 2026-11-13：兩欄後每格內寬只剩 ~140px，「#1 ● POS」跟「1,807,730」排同一行
+             要 142px → 名稱和金額黏在一起（畫面出現「POS1,807,730」「PChome30,897」）。
+             改成上下兩行：上＝名次＋通路，下＝金額靠左、占比靠右。
+             下行最寬（8 位數金額＋占比）約 105px，320px 手機的 113px 也放得下 */
+          .rank-item {
+            flex-direction: column; align-items: stretch;
+            padding: 9px 10px; gap: 5px;
+          }
+          .rank-num { width: 20px; height: 20px; font-size: 10px; border-radius: 6px; }
           .rank-left { gap: 6px; }
-          .rank-name { font-size: 12px; }
-          .rank-right .v1 { font-size: 12px; }
+          .rank-label { min-width: 0; }
+          .rank-name {
+            font-size: 12px; min-width: 0;
+            overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+          }
+          .rank-right {
+            display: flex; align-items: baseline; justify-content: space-between;
+            gap: 6px; text-align: left;
+          }
+          .rank-right .v1 { font-size: 13px; }
 
           /* 圖表：手機不需要 480px 高的柱狀圖，看得出高低就夠
              （高度是 inline style，必須 !important 才蓋得掉） */
@@ -5083,7 +5236,7 @@ function Dashboard() {
              176px 會讓圓被切掉一半——手機寬度放得下 230px，這裡刻意不縮 */
 
           .big-header { padding: 14px; gap: 6px; }
-          .big-header-title h3 { font-size: 19px; }
+          .big-header-title h2 { font-size: 19px; }
           /* 「看昨日／2026／9月／金額」原本各佔一行（近 190px），排成一列省一半 */
           .big-header-right {
             display: flex; align-items: baseline;
@@ -5789,6 +5942,7 @@ function Dashboard() {
                       <div className="rank-left">
                         <div className="rank-num">#{i + 1}</div>
                         <div
+                          className="rank-label"
                           style={{
                             display: "flex",
                             alignItems: "center",
@@ -6014,7 +6168,7 @@ function Dashboard() {
               <div>
                 <div className="big-header-title">
                   <CalendarDays size={18} color="var(--gold-dim)" />
-                  <h3>每日營收與支出管理</h3>
+                  <h2>每日營收與支出管理</h2>
                 </div>
                 <div className="big-header-note">
                   DAILY REVENUE WORKSTATION · Tab↹ 右移 · Enter↵ 下移 ·
@@ -6106,9 +6260,7 @@ function Dashboard() {
             </div>
 
             <div className="work-grid">
-              <aside
-                style={{ display: "flex", flexDirection: "column", gap: 14 }}
-              >
+              <aside className="work-side">
                 {/* Ad Spend Sidebar */}
                 <div className="sidebar-box">
                   <div className="sidebar-head">
@@ -6205,8 +6357,13 @@ function Dashboard() {
                   </div>
                   <div className="order-list">
                     {orderInfos.map((o) => {
+                      // 客單價只在「單數是真的」時才算。單數沒填時是用營收 ÷ 10,000 推估的，
+                      // 再拿營收去除它，永遠得到一萬上下的假數字（例 MOMO ≈1 單 → $11,666），
+                      // 所以推估列顯示「—」（2026-11-13）
                       const aov =
-                        o.count > 0 ? Math.round(o.ratioAmount / o.count) : 0;
+                        o.hasOverride && o.count > 0
+                          ? Math.round(o.ratioAmount / o.count)
+                          : 0;
                       const isFixed = FIXED_CHANNELS.some(
                         (c) => c.key === o.key
                       );
@@ -6253,19 +6410,30 @@ function Dashboard() {
                           </div>
                           <div>
                             <div
+                              title={
+                                aov
+                                  ? undefined
+                                  : !o.hasOverride
+                                  ? "尚未填寫訂單數，無法計算客單價"
+                                  : o.count > 0
+                                  ? "至昨日尚無營收，無法計算客單價"
+                                  : "單數為 0，無法計算客單價"
+                              }
                               style={{
                                 border: "1px solid var(--border)",
                                 background: "var(--bg-deep)",
                                 borderRadius: 8,
-                                padding: "8px 10px",
+                                padding: "8px 4px",
                                 textAlign: "center",
                                 fontFamily: "'DM Mono', monospace",
                                 fontWeight: 800,
-                                color: "var(--text-secondary)",
+                                color: aov
+                                  ? "var(--text-secondary)"
+                                  : "var(--text-dim)",
                                 fontSize: 13,
                               }}
                             >
-                              {aov ? `$${num(aov)}` : "$0"}
+                              {aov ? `$${num(aov)}` : "—"}
                             </div>
                           </div>
                           <div
@@ -6285,7 +6453,12 @@ function Dashboard() {
                                 <Trash2 size={13} />
                               </button>
                             ) : (
-                              <div className="fixed-badge">FX</div>
+                              <div
+                                className="fixed-badge"
+                                title="固定通路，不可刪除"
+                              >
+                                固定
+                              </div>
                             )}
                           </div>
                         </div>
@@ -6311,7 +6484,7 @@ function Dashboard() {
                         fontFamily: "'DM Mono', monospace",
                       }}
                     >
-                      ※ 未填寫的通路以「營收 ÷ 10,000」推估訂單數
+                      ※ 未填寫的通路以「營收 ÷ 10,000」推估訂單數（有營收至少 1 單），不列客單價
                     </div>
                   )}
                   <div
@@ -6612,14 +6785,18 @@ function Dashboard() {
 
                 <div className="table-wrap">
                   <div className="table-scroll">
-                    <table ref={tableRef}>
+                    <table
+                      ref={tableRef}
+                      aria-label={`${activeYear} 年度 ${activeMonth} 每日營收（各通路）`}
+                    >
                       <thead>
                         <tr>
-                          <th className="sticky-left">日期</th>
+                          <th className="sticky-left" scope="col">日期</th>
                           {FIXED_CHANNELS.map((ch) => (
                             <th
                               key={ch.key}
-                              style={{ color: colorOf(ch.key, 0, theme) }}
+                              scope="col"
+                              style={{ color: textColorOf(ch.key, 0, theme) }}
                             >
                               {ch.label}
                               {(ch.key === "web" || ch.key === "pos") && (
@@ -6641,9 +6818,9 @@ function Dashboard() {
                             </th>
                           ))}
                           {monthData.dynamicChannels.map((key) => (
-                            <th key={key}>{labelOf(key)}</th>
+                            <th key={key} scope="col">{labelOf(key)}</th>
                           ))}
-                          <th style={{ color: "var(--gold)" }}>小計</th>
+                          <th scope="col" style={{ color: "var(--gold)" }}>小計</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -6789,7 +6966,7 @@ function Dashboard() {
                             <td
                               key={ch.key}
                               className="tfoot-right upgraded"
-                              style={{ color: colorOf(ch.key, 0, theme) }}
+                              style={{ color: textColorOf(ch.key, 0, theme) }}
                             >
                               <div className="tfoot-number">
                                 {num(displayTotals[ch.key])}
