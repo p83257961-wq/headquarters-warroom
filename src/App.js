@@ -3419,12 +3419,27 @@ function Dashboard() {
     return { lastYear, prevMonth, prevMonthTab };
   }, [allYears, activeYear, activeMonth, effRangeStart, effRangeEnd]);
 
+  // 區間裡一天都還沒發生（2026-11-13）：還沒開始的月份、每月 1 號早上資料還沒進來、
+  // 或進行中月份選到的全是未來的天數。合計一定是 0，照算會顯示「去年同期 -100.0%」
+  // 「上月同區間 -100.0%」，看起來像業績歸零——這種時候不算百分比，顯示「—」。
+  // 已經過完的日子真的做 0 元，照舊顯示 -100%（那是事實）
+  const _activeCal = getCalendarYearMonth(activeYear, activeMonth);
+  const _activeIsFuture =
+    _activeCal.calendarYear > _today.getFullYear() ||
+    (_activeCal.calendarYear === _today.getFullYear() &&
+      _activeCal.calendarMonth > _today.getMonth() + 1);
+  const rangeNotStarted =
+    rangeTotals.total === 0 &&
+    (_isRunningMonth(activeMonth)
+      ? effRangeStart > lastDataDay
+      : _activeIsFuture);
+
   const rangeYoY =
-    rangeStats.lastYear > 0
+    !rangeNotStarted && rangeStats.lastYear > 0
       ? ((rangeTotals.total - rangeStats.lastYear) / rangeStats.lastYear) * 100
       : null;
   const rangeMoM =
-    rangeStats.prevMonth > 0
+    !rangeNotStarted && rangeStats.prevMonth > 0
       ? ((rangeTotals.total - rangeStats.prevMonth) / rangeStats.prevMonth) *
         100
       : null;
@@ -4337,6 +4352,12 @@ function Dashboard() {
           letter-spacing: -0.03em;
         }
         .pie-center .small { margin-top: 4px; font-size: 10px; color: var(--text-dim); font-weight: 700; letter-spacing: .1em; text-transform: uppercase; }
+        /* 2026-11-13：圓餅圖的扇形可以被聚焦（滑鼠點一下、或按 Tab），瀏覽器會在圓餅外面畫一個
+           黑色（深色主題是白色）方框。這張圖沒有可以操作的東西，不需要焦點框；
+           JSX 那邊另外用 rootTabIndex={-1} 讓 Tab 不停在它上面。只關圓餅，不動趨勢圖 */
+        .recharts-pie:focus,
+        .recharts-pie-sector:focus,
+        .recharts-sector:focus { outline: none; }
         .pie-empty {
           position: absolute; inset: 0;
           display: flex; flex-direction: column;
@@ -4353,6 +4374,8 @@ function Dashboard() {
           font-family: 'DM Mono', monospace;
         }
         .rank-empty {
+          /* 手機與平板的排名清單是兩欄格線，不橫跨的話這段說明只佔半邊、擠成七行 */
+          grid-column: 1 / -1;
           border: 1px dashed var(--border-bright);
           border-radius: 12px;
           padding: 18px 16px;
@@ -4493,6 +4516,9 @@ function Dashboard() {
         }
         .mini-label { font-size: 10px; font-weight: 700; color: var(--text-dim); margin-bottom: 5px; text-transform: uppercase; letter-spacing: .06em; }
         .mini-row { display: flex; align-items: center; gap: 5px; }
+        /* 側欄廣告費那格只有 80px 寬，左右內距各 12px 時只放得下 6 個字元；
+           月廣告費破十萬（103,422＝7 個字元）尾數就被切掉一點。內距收成 8px，放得下 7 個字元 */
+        .mini-row .input { padding: 0 8px; }
 
         .btn-add {
           border: 1px solid var(--border);
@@ -4578,6 +4604,14 @@ function Dashboard() {
           font-size: 10px; font-weight: 700; color: var(--text-dim);
         }
         .field-box select, .field-box input { border: none; outline: none; background: transparent; color: var(--text-primary); }
+        /* 2026-11-13：裡面的下拉／輸入框自己的 outline 被拿掉了，原本聚焦完全沒有提示——
+           按 Tab 不知道停在哪一顆、點「搜尋日期」也看不出已經可以打字。聚焦時整個框亮起，
+           樣式跟表格輸入格（.cell-input:focus）一致 */
+        .field-box:focus-within,
+        .selector-box:focus-within {
+          border-color: var(--gold-dim);
+          box-shadow: 0 0 0 2px var(--focus-ring);
+        }
         .field-box select {
           font-family: 'DM Mono', monospace;
           font-weight: 700; color: var(--gold); cursor: pointer;
@@ -4665,6 +4699,11 @@ function Dashboard() {
           padding: 8px 10px;
         }
         tbody tr:hover { background: var(--bg-hover); }
+        /* 搜尋無結果的說明列：靠左（表格在窄螢幕會橫向捲，置中會跑到畫面外） */
+        tbody td.table-empty {
+          padding: 26px 14px; text-align: left;
+          color: var(--text-dim); font-size: 12px;
+        }
         .sticky-left {
           position: sticky; left: 0; z-index: 1;
           background: var(--bg-deep);
@@ -4690,8 +4729,10 @@ function Dashboard() {
         /* 淺色主題的表格底色是 --bg-surface（見下方 [data-theme="light"] .table-wrap），不是 --bg-deep */
         [data-theme="light"] tbody tr.row-spike .sticky-left { background: linear-gradient(rgba(251,191,36,0.05), rgba(251,191,36,0.05)), var(--bg-surface); }
         [data-theme="light"] tbody tr.row-low .sticky-left { background: linear-gradient(rgba(239,68,68,0.04), rgba(239,68,68,0.04)), var(--bg-surface); }
-        [data-theme="light"] tbody tr.row-spike:hover .sticky-left { background: linear-gradient(rgba(251,191,36,0.1), rgba(251,191,36,0.1)), var(--bg-hover); }
-        [data-theme="light"] tbody tr.row-low:hover .sticky-left { background: linear-gradient(rgba(239,68,68,0.08), rgba(239,68,68,0.08)), var(--bg-hover); }
+        /* 淺色主題滑鼠移上去時，異常列整列不變色（上面 [data-theme="light"] tr.row-spike 的優先序比 tr:hover 高），
+           所以日期格是「加深的淡色」疊在「整列的淡色＋表格底色」上——三層照原本的疊法寫，顏色才跟改成不透明之前一樣 */
+        [data-theme="light"] tbody tr.row-spike:hover .sticky-left { background: linear-gradient(rgba(251,191,36,0.1), rgba(251,191,36,0.1)), linear-gradient(rgba(251,191,36,0.05), rgba(251,191,36,0.05)), var(--bg-surface); }
+        [data-theme="light"] tbody tr.row-low:hover .sticky-left { background: linear-gradient(rgba(239,68,68,0.08), rgba(239,68,68,0.08)), linear-gradient(rgba(239,68,68,0.04), rgba(239,68,68,0.04)), var(--bg-surface); }
         /* min-width：輸入框寬度是 100%，表格擠的時候會被壓到比數字還窄、尾數被切掉。
            --min-ch＝該欄最長數字的字數（JSX 逐欄算好帶進來），1ch＝等寬字一個字的寬度，
            18px＝左右內距 16＋邊框 2。表格真的放不下就在自己的捲動區橫向捲，不切數字。
@@ -5965,7 +6006,8 @@ function Dashboard() {
                   {deferredDonutData.length === 0 ? (
                     <div className="pie-empty">
                       本月尚無營收資料
-                      <span>網店/POS/蝦皮由自動餵數每天早上 07:30 寫入昨日資料</span>
+                      {/* 圓圈裡放不下一整句（原本「每天早／上」從中間斷行），完整說明在右邊那格 */}
+                      <span>每天早上 07:30<br />自動寫入昨日資料</span>
                     </div>
                   ) : (
                   <ResponsiveContainer width="100%" height="100%">
@@ -5979,6 +6021,7 @@ function Dashboard() {
                         paddingAngle={2}
                         stroke={tc.bgDeep}
                         strokeWidth={3}
+                        rootTabIndex={-1}
                       >
                         {deferredDonutData.map((entry) => (
                           <Cell key={entry.key} fill={entry.color} />
@@ -5997,8 +6040,8 @@ function Dashboard() {
                 <div className="rank-list">
                   {donutData.length === 0 && (
                     <div className="rank-empty">
-                      本月還沒有任何通路營收——網店/POS/蝦皮與廣告費由自動餵數
-                      每天早上 07:30 寫入昨日資料（同時回刷近 14 天校正），這裡會即時排出通路占比。
+                      {/* 整句寫成一個字串：JSX 換行會變成一個空白，原本畫面上是「自動餵數 每天早上」 */}
+                      {"本月還沒有任何通路營收——網店/POS/蝦皮與廣告費由自動餵數每天早上 07:30 寫入昨日資料（同時回刷近 14 天校正），這裡會即時排出通路占比。"}
                     </div>
                   )}
                   {donutData.map((item, i) => (
@@ -6756,12 +6799,16 @@ function Dashboard() {
                     {rangeIncomplete && (
                       <div
                         className="range-chip"
-                        title={`本月資料只到 ${lastDataDay} 日，選取區間含 ${
-                          rangeMissingDays
-                        } 天尚無資料；右側去年同期／上月同區間是照 ${effRangeStart}–${effRangeEnd}日 完整比對，故年增偏低屬正常`}
+                        title={
+                          lastDataDay > 0
+                            ? `本月資料只到 ${lastDataDay} 日，選取區間含 ${rangeMissingDays} 天尚無資料；右側去年同期／上月同區間是照 ${effRangeStart}–${effRangeEnd}日 完整比對，故年增偏低屬正常`
+                            : "本月第一筆資料還沒進來（自動餵數每天早上寫入昨日資料）；有資料之前，右側不計算年增與月增"
+                        }
                       >
-                        ⚠ 本月資料至 {lastDataDay} 日（區間含{" "}
-                        {rangeMissingDays} 天未發生）
+                        {/* 每月 1 號早上資料還沒進來時 lastDataDay＝0，「資料至 0 日」讀不通 */}
+                        {lastDataDay > 0
+                          ? `⚠ 本月資料至 ${lastDataDay} 日（區間含 ${rangeMissingDays} 天未發生）`
+                          : "⚠ 本月資料尚未進來"}
                       </div>
                     )}
                     <div className="range-chip">
@@ -6888,6 +6935,18 @@ function Dashboard() {
                         </tr>
                       </thead>
                       <tbody>
+                        {/* 搜尋不到任何一天時，原本表頭底下直接接月總計、中間什麼都沒有 */}
+                        {filteredRows.length === 0 && (
+                          <tr>
+                            <td
+                              className="table-empty"
+                              colSpan={currentChannels.length + 2}
+                            >
+                              {effRangeStart}–{effRangeEnd} 日裡找不到含「
+                              {search.trim().replace(/[^0-9]/g, "")}」的日期
+                            </td>
+                          </tr>
+                        )}
                         {filteredRows.map((row) => {
                           const subtotal = rowTotal(row, currentChannels);
                           const flag = anomalyFlags[row.day];
