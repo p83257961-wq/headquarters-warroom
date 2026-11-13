@@ -1237,9 +1237,12 @@ const CHANNEL_COLORS = {
     google: "#2D6A4F",
   },
 };
+// 沒有固定色的通路（之後手動新增的）用這組。2026-11-13 換色：原本四色就是網店藍／MOMO 紫／
+// POS 黃／Google 綠，新增第 8 個通路會拿到「跟網店一模一樣的藍」，圓餅與排名分不出來。
+// 改成上面固定色都沒用過的色相（黃綠、靛、棕、蘭紫），前兩個最不容易混淆
 const CHANNEL_FALLBACK = {
-  dark: ["#38BDF8", "#A78BFA", "#FBBF24", "#10B981"],
-  light: ["#4A7FA5", "#6B5B8A", "#8A6A2E", "#2D6A4F"],
+  dark: ["#A3E635", "#818CF8", "#D4A373", "#F0ABFC"],
+  light: ["#556E26", "#3D4F94", "#7A5540", "#8A4B8F"],
 };
 
 /* =========================
@@ -1275,7 +1278,16 @@ const num = (v) =>
     Number(v || 0)
   );
 
-const labelOf = (k) => LABELS[k] || k;
+// 手動新增的通路／渠道，key 一律存小寫（用來擋重複），原本顯示也跟著變小寫：
+// 打「Amazon」畫面上是「amazon」、打「LINE廣告」是「line廣告」（2026-11-13 沙盒實測）。
+// 顯示時把開頭的英文字補回大寫，幾個全大寫或特殊寫法的品牌照官方寫法。只影響顯示，key 與資料不動
+const BRAND_CASE = { line: "LINE", tiktok: "TikTok", youtube: "YouTube", ig: "IG", ubereats: "UberEats" };
+const labelOf = (k) =>
+  LABELS[k] ||
+  String(k).replace(
+    /^[a-z]+/,
+    (w) => BRAND_CASE[w] || w.charAt(0).toUpperCase() + w.slice(1)
+  );
 
 const sanitizeDigits = (v) => String(v ?? "").replace(/[^0-9]/g, "");
 
@@ -4173,6 +4185,9 @@ function Dashboard() {
           background: var(--bg-elevated);
           padding: 6px 10px; font-family: 'DM Mono', monospace;
           font-size: 11px; font-weight: 700; color: var(--gold);
+          /* 不折行（原本只有手機層有）：旁邊的通路下拉寬度跟著最長的通路名稱走，
+             名稱一長，601px 上下這顆就被擠成一個字一行的直書 */
+          white-space: nowrap;
         }
 
         /* ── Trend Layout ── */
@@ -5040,6 +5055,8 @@ function Dashboard() {
           border-color: var(--gold-dim);
           background: var(--bg-hover);
         }
+        /* 滑鼠移上去時底色變亮，深色主題的「DARK」小字對比掉到 4.46（差一點不到 4.5） */
+        .theme-toggle:hover .toggle-label { color: var(--text-secondary); }
         .toggle-track {
           width: 44px;
           height: 24px;
@@ -5374,9 +5391,12 @@ function Dashboard() {
           /* ⚠ 欄寬的真正元凶是 <input> 的預設固有寬度（約 170px），不是 padding——
              桌機 1580px 看不出來，手機一欄就吃掉半個螢幕。給定寬度後
              一個畫面看得到「日期＋3~4 個通路」而不是 2 個 */
+          /* min-width（2026-11-13）：原本寫死 0，單日破百萬（1,234,567＝9 個字元）在 64px 裡放不下，
+             尾數被切掉——被切的數字看起來像另一個比較小的數字。跟桌機一樣用該欄最長數字的字數當下限；
+             7 個字元以內算出來不到 64px，現在的資料欄寬完全不變（10px＝左右內距 8＋邊框 2） */
           .cell-input,
           [data-theme="light"] .cell-input {
-            width: 64px; min-width: 0;
+            width: 64px; min-width: calc(var(--min-ch, 0) * 1ch + 10px);
             height: 38px; font-size: 12px; padding: 0 4px;
             border-color: transparent; background: transparent;
           }
@@ -6178,8 +6198,11 @@ function Dashboard() {
                     <div className="roas-value bad">
                       {money(roasStats.unattributed)}
                     </div>
+                    {/* 原文「新渠道請補進檔頭 AD_ATTRIBUTION 歸因表」是寫給改程式的人看的，
+                        老闆新增渠道後看到的是這句——改成他看得懂、知道下一步的說法
+                        （要補的地方＝檔頭的 AD_ATTRIBUTION） */}
                     <div className="roas-note">
-                      新渠道請補進檔頭 AD_ATTRIBUTION 歸因表
+                      還沒算進任何通路的 ROAS，要歸給哪個通路請跟 Claude 說
                     </div>
                   </div>
                 )}
@@ -6640,8 +6663,8 @@ function Dashboard() {
                   <div className="auto-warn" role="status">
                     <AlertTriangle size={14} />
                     <span>
-                      網店／POS／蝦皮／Google／Meta 由自動餵數維護：手動修改的值會在
-                      次日早上 07:30 被校正回 API 真值。MOMO／其他通路仍需手動維護。
+                      {/* 整句寫成一個字串：JSX 換行會變成一個空白（原本畫面上是「會在 次日早上」） */}
+                      {"網店／POS／蝦皮／Google／Meta 由自動餵數維護：手動修改的值會在次日早上 07:30 被校正回 API 真值。MOMO／其他通路仍需手動維護。"}
                     </span>
                     <button type="button" onClick={() => setAutoEditNotice(false)}>
                       知道了
