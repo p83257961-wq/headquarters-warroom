@@ -3432,6 +3432,23 @@ function Dashboard() {
   // 表格底部總計：全月時顯示月總計，選了區間就顯示區間總計
   const displayTotals = isFullRange ? totals : rangeTotals;
 
+  // 每一欄「最長的那個數字」有幾個字（含千分位）。輸入框寬度是 100%，表格一擠就會被壓到
+  // 比數字還窄、尾數被切掉（實測 768px 時 11,580 顯示成 11,58；1281–1296px 的桌機也有 6 格）。
+  // 這個字數經 CSS 變數 --min-ch 變成該欄輸入框的最小寬度：只有真的放不下的那幾欄會被撐開，
+  // 數字短的欄位不受影響（統一給一個固定下限會讓 1366px 筆電平白多出橫向捲動）。
+  const cellMinCh = useMemo(() => {
+    const out = {};
+    for (const k of currentChannels) {
+      let longest = 0;
+      for (const r of monthData.rows) {
+        const s = String(r[k] ?? "");
+        if (s !== "") longest = Math.max(longest, num(s).length, s.length);
+      }
+      out[k] = longest;
+    }
+    return out;
+  }, [monthData.rows, currentChannels]);
+
   // 平假日分析：週六日「加上國定假日」都算假日，分別統計日均（只計有營收的天）
   const dayTypeStats = useMemo(() => {
     let wdSum = 0,
@@ -3968,6 +3985,8 @@ function Dashboard() {
           flex-wrap: wrap;
           justify-content: flex-end;
         }
+        /* 年度＋月份的外包：預設不產生盒子，兩顆照舊直接排在 topbar-right 裡 */
+        .selector-group { display: contents; }
 
         .selector-box {
           background: var(--bg-surface);
@@ -4669,7 +4688,12 @@ function Dashboard() {
         [data-theme="light"] tbody tr.row-low .sticky-left { background: rgba(239,68,68,0.04); }
         [data-theme="light"] tbody tr.row-spike:hover .sticky-left { background: rgba(251,191,36,0.1); }
         [data-theme="light"] tbody tr.row-low:hover .sticky-left { background: rgba(239,68,68,0.08); }
+        /* min-width：輸入框寬度是 100%，表格擠的時候會被壓到比數字還窄、尾數被切掉。
+           --min-ch＝該欄最長數字的字數（JSX 逐欄算好帶進來），1ch＝等寬字一個字的寬度，
+           18px＝左右內距 16＋邊框 2。表格真的放不下就在自己的捲動區橫向捲，不切數字。
+           手機層有自己的固定寬度（min-width:0 會蓋掉這條） */
         .cell-input {
+          min-width: calc(var(--min-ch, 0) * 1ch + 18px);
           width: 100%; height: 36px; border-radius: 8px;
           border: 1px solid var(--border);
           background: var(--bg-surface);
@@ -5041,7 +5065,7 @@ function Dashboard() {
             gap: 12px;
           }
           /* 營收結構：甜甜圈在左、通路排名在右（原本上下疊，光這塊就 689px） */
-          .pie-layout { grid-template-columns: 240px minmax(0, 1fr); align-items: start; }
+          .pie-layout { grid-template-columns: 240px minmax(0, 1fr); }
           /* 廣告投放：≤900 被壓成一張佔一行，全寬時三欄放得下 */
           .ad-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
         }
@@ -5049,6 +5073,9 @@ function Dashboard() {
           /* KPI 跟手機同一套階層：年度累計獨佔一行，當月營收與年度目標並排 */
           .grid-3 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
           .grid-3 > :first-child { grid-column: 1 / -1; }
+          /* 頂部五顆一排要 795px，這段寬度放不下：原本只有「月份」落單掉到第二行。
+             年度＋月份綁成一組，要換行就兩顆一起換 */
+          .selector-group { display: flex; gap: 12px; flex: 0 0 auto; }
         }
         @media (min-width: 761px) and (max-width: 1280px) {
           /* 廣告投放與訂單管理並排（原本上下疊 916px）。761px 起每欄 ≥325px，
@@ -5075,6 +5102,17 @@ function Dashboard() {
             grid-template-columns: repeat(2, minmax(0, 1fr));
             gap: 6px; align-content: start;
           }
+        }
+
+        /* ── 窄桌機（1281–1340px）── 2026-11-13
+           這段寬度還是桌機雙欄，但表格區只剩 830px 上下，九欄放不下：
+           原本是輸入框被壓窄、數字尾數被切（6 格）；輸入框有了逐欄下限（--min-ch）之後，
+           換成最右邊的小計欄被擠出去 20–50px。把儲存格左右內距收小（每欄省 8–12px），整張表放得回去。
+           只動這 60px 的區間；1341px 以上（含老闆的 1580）一條規則都不受影響。 */
+        @media (min-width: 1281px) and (max-width: 1340px) {
+          thead th { padding: 12px 8px; }
+          tbody td { padding: 8px 6px; }
+          tfoot td { padding: 14px 8px; }
         }
 
         /* ── 手機（≤600px）── 老闆 2026-09-04 指定：「手機不需要的可以省略、
@@ -5178,6 +5216,8 @@ function Dashboard() {
           /* 320px 的手機欄寬再少 28px，22px 的「$3,003,755」會被切掉 7px → 跟著螢幕寬縮
              （320 → 18.9px、373 以上 → 22px） */
           .grid-3 > :not(:first-child) .kpi-value { font-size: clamp(18px, 5.9vw, 22px); }
+          /* 同一張卡的標題：320px 時「年度目標達成率」七個字要 84px、只有 82px，最後一個字獨自掉到第二行 */
+          .grid-3 > :not(:first-child) .kpi-title { font-size: clamp(10.5px, 3.4vw, 12px); }
           .grid-3 > :not(:first-child) .kpi-card,
           .grid-3 > :not(:first-child) { padding: 14px; }
           .grid-3 > :not(:first-child) .icon-box { width: 28px; height: 28px; }
@@ -5355,6 +5395,9 @@ function Dashboard() {
                 lastSyncedAt={lastSyncedAt}
                 onRetry={retrySync}
               />
+              {/* 年度＋月份包成一組：平常 display:contents（等於沒包，桌機／手機排版不變）；
+                  601–900px 一排放不下時兩顆一起換行，不會只有月份落單掉到下一行 */}
+              <div className="selector-group">
               <div className="selector-box">
                 <div className="selector-label">Fiscal Year</div>
                 <div className="selector-row">
@@ -5388,6 +5431,7 @@ function Dashboard() {
                   </select>
                   <ChevronDown size={14} color="var(--text-dim)" />
                 </div>
+              </div>
               </div>
             </div>
           </div>
@@ -6880,6 +6924,7 @@ function Dashboard() {
                                       type="text"
                                       inputMode="numeric"
                                       className="cell-input"
+                                      style={{ "--min-ch": cellMinCh[ch.key] || 0 }}
                                       data-day={row.day}
                                       data-ch={ch.key}
                                       value={displayCell(row[ch.key], cid)}
@@ -6910,6 +6955,7 @@ function Dashboard() {
                                       type="text"
                                       inputMode="numeric"
                                       className="cell-input"
+                                      style={{ "--min-ch": cellMinCh[key] || 0 }}
                                       data-day={row.day}
                                       data-ch={key}
                                       value={displayCell(row[key], cid)}
