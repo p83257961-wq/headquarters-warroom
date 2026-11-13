@@ -1745,7 +1745,7 @@ function feedFreshness(feedAt, feedAtShopee, feedDataTo, feedDataToShopee) {
 // bot 餵數新鮮度徽章：同時監看兩支腳本的心跳（wr_feed 的 feedAt、shopee_feed 的
 // feedAtShopee），取「較舊的一支」判斷——只要有一邊掛掉就轉紅，避免「網店有更新、
 // 蝦皮已停擺」卻顯示綠燈的假安全（bot 靜默失敗的死活偵測）
-function FeedBadge({ feedAt, feedAtShopee, feedDataTo, feedDataToShopee }) {
+function FeedBadge({ feedAt, feedAtShopee, feedDataTo, feedDataToShopee, loading }) {
   const stamps = [feedAt, feedAtShopee].filter(Boolean);
   const oldest =
     stamps.length === 2
@@ -1804,14 +1804,20 @@ function FeedBadge({ feedAt, feedAtShopee, feedDataTo, feedDataToShopee }) {
     );
   }
   if (!feedAt) {
+    // loading＝雲端資料還沒讀到。每次開頁的頭一兩秒都在這個狀態，
+    // 原本一律顯示「無紀錄」，看起來像自動餵數沒在跑（2026-11-13）
     return (
       <div
         className="sync-badge sync-idle"
         role="status"
-        title="尚未收到自動餵數紀錄（首次執行排程後出現）"
+        title={
+          loading
+            ? "正在讀取雲端資料"
+            : "尚未收到自動餵數紀錄（首次執行排程後出現）"
+        }
       >
         <Cloud size={13} />
-        <span>自動餵數：無紀錄</span>
+        <span>{loading ? "自動餵數：讀取中…" : "自動餵數：無紀錄"}</span>
       </div>
     );
   }
@@ -2088,6 +2094,9 @@ function Dashboard() {
   const autoEditDismissedRef = useRef(false);
   const autoEditNotice = autoEditNoticeState && !autoEditDismissedRef.current;
   const setAutoEditNotice = (v) => {
+    // 雲端資料還沒讀到時，輸入會被擋下來（另有「暫時不能編輯」的提醒）——沒改到任何值，
+    // 就不該再跳「手動修改的值會被校正」這一條；原本兩條一起出現，後面這條還會一直留著
+    if (v === true && !hydratedRef.current) return;
     if (v === false) autoEditDismissedRef.current = true;
     setAutoEditNoticeState(v);
   };
@@ -5470,6 +5479,7 @@ function Dashboard() {
                 feedAtShopee={feedAtShopee}
                 feedDataTo={feedDataTo}
                 feedDataToShopee={feedDataToShopee}
+                loading={!hydrated}
               />
               <SyncBadge
                 syncState={syncState}
