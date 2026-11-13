@@ -4680,14 +4680,18 @@ function Dashboard() {
           background: var(--bg-elevated);
         }
         tbody tr:hover .sticky-left { background: var(--bg-hover); }
-        tbody tr.row-spike .sticky-left { background: rgba(251,191,36,0.04); }
-        tbody tr.row-low .sticky-left { background: rgba(239,68,68,0.03); }
-        tbody tr.row-spike:hover .sticky-left { background: rgba(251,191,36,0.08); }
-        tbody tr.row-low:hover .sticky-left { background: rgba(239,68,68,0.06); }
-        [data-theme="light"] tbody tr.row-spike .sticky-left { background: rgba(251,191,36,0.05); }
-        [data-theme="light"] tbody tr.row-low .sticky-left { background: rgba(239,68,68,0.04); }
-        [data-theme="light"] tbody tr.row-spike:hover .sticky-left { background: rgba(251,191,36,0.1); }
-        [data-theme="light"] tbody tr.row-low:hover .sticky-left { background: rgba(239,68,68,0.08); }
+        /* 2026-11-13：日期格是黏住的（sticky），表格橫向捲動時其他欄會從它底下捲過去。
+           原本異常列的日期格只鋪半透明色，手機橫捲時後面的數字會透出來疊在日期上。
+           黏住的格子底色一律要不透明：先鋪實色、再疊同一層淡色（疊出來跟整列的顏色一樣） */
+        tbody tr.row-spike .sticky-left { background: linear-gradient(rgba(251,191,36,0.04), rgba(251,191,36,0.04)), var(--bg-deep); }
+        tbody tr.row-low .sticky-left { background: linear-gradient(rgba(239,68,68,0.03), rgba(239,68,68,0.03)), var(--bg-deep); }
+        tbody tr.row-spike:hover .sticky-left { background: linear-gradient(rgba(251,191,36,0.08), rgba(251,191,36,0.08)), var(--bg-hover); }
+        tbody tr.row-low:hover .sticky-left { background: linear-gradient(rgba(239,68,68,0.06), rgba(239,68,68,0.06)), var(--bg-hover); }
+        /* 淺色主題的表格底色是 --bg-surface（見下方 [data-theme="light"] .table-wrap），不是 --bg-deep */
+        [data-theme="light"] tbody tr.row-spike .sticky-left { background: linear-gradient(rgba(251,191,36,0.05), rgba(251,191,36,0.05)), var(--bg-surface); }
+        [data-theme="light"] tbody tr.row-low .sticky-left { background: linear-gradient(rgba(239,68,68,0.04), rgba(239,68,68,0.04)), var(--bg-surface); }
+        [data-theme="light"] tbody tr.row-spike:hover .sticky-left { background: linear-gradient(rgba(251,191,36,0.1), rgba(251,191,36,0.1)), var(--bg-hover); }
+        [data-theme="light"] tbody tr.row-low:hover .sticky-left { background: linear-gradient(rgba(239,68,68,0.08), rgba(239,68,68,0.08)), var(--bg-hover); }
         /* min-width：輸入框寬度是 100%，表格擠的時候會被壓到比數字還窄、尾數被切掉。
            --min-ch＝該欄最長數字的字數（JSX 逐欄算好帶進來），1ch＝等寬字一個字的寬度，
            18px＝左右內距 16＋邊框 2。表格真的放不下就在自己的捲動區橫向捲，不切數字。
@@ -4707,8 +4711,13 @@ function Dashboard() {
           border-color: var(--gold-dim);
           box-shadow: 0 0 0 2px var(--focus-ring);
         }
+        /* 小計欄三層的右緣對齊同一條線：表頭「小計」、每列數字、頁尾總額。
+           原本表頭置中、數字靠右，「小計」兩個字飄在數字左邊 60px；數字又比總額多出 4px。
+           右內距跟著頁尾走（桌機 14／窄桌機 8／手機 4，後兩個在各自的 media 區塊裡） */
+        thead th.th-subtotal { text-align: right; }
         .subtotal {
           text-align: right;
+          padding-right: 14px;
           font-family: 'DM Mono', monospace;
           font-weight: 800; color: var(--text-primary);
         }
@@ -4745,10 +4754,16 @@ function Dashboard() {
           color: var(--text-primary);
         }
         .tfoot-number.muted { color: var(--text-secondary); }
-        .tfoot-right.upgraded.grand-total {
-          min-width: 160px;
+        /* 2026-11-13：總額格黏在表格底部，後面會有列捲過去。原本整格是半透明底＋圓角，
+           後面那幾列的小計（或「—」）會透出來疊在總額數字上。格子本身維持不透明的頁尾底色，
+           淡色圓角塊改畫在 ::before（z-index:-1＝在格子底色之上、文字之下） */
+        .tfoot-right.upgraded.grand-total { min-width: 160px; }
+        .tfoot-right.upgraded.grand-total::before {
+          content: ""; position: absolute;
+          top: 0; right: 0; bottom: 0; left: 0; z-index: -1;
           background: var(--gold-glow);
           border-radius: 10px;
+          pointer-events: none;
         }
         .tfoot-total-label {
           font-family: 'DM Mono', monospace;
@@ -5108,11 +5123,15 @@ function Dashboard() {
            這段寬度還是桌機雙欄，但表格區只剩 830px 上下，九欄放不下：
            原本是輸入框被壓窄、數字尾數被切（6 格）；輸入框有了逐欄下限（--min-ch）之後，
            換成最右邊的小計欄被擠出去 20–50px。把儲存格左右內距收小（每欄省 8–12px），整張表放得回去。
-           只動這 60px 的區間；1341px 以上（含老闆的 1580）一條規則都不受影響。 */
+           只動這 60px 的區間；1341px 以上（含老闆的 1580）一條規則都不受影響。
+           同一段寬度月份列也差 19–34px 放不下（1320px 以上才剛好），整排會被捲動置中、
+           最左邊的「年份」被切掉半個字；月份鈕左右內距各收 3px（共省 72px）就整排放得下 */
         @media (min-width: 1281px) and (max-width: 1340px) {
           thead th { padding: 12px 8px; }
           tbody td { padding: 8px 6px; }
+          tbody td.subtotal { padding-right: 8px; }
           tfoot td { padding: 14px 8px; }
+          .toolbar-left .tab-btn { padding: 8px 11px; }
         }
 
         /* ── 手機（≤600px）── 老闆 2026-09-04 指定：「手機不需要的可以省略、
@@ -5304,6 +5323,7 @@ function Dashboard() {
           table { font-size: 12px; }
           thead th { padding: 8px 4px; font-size: 10px; letter-spacing: .02em; }
           tbody td { padding: 4px 4px; }
+          tbody td.subtotal { padding-right: 4px; }
           .sticky-left { padding-left: 8px; font-size: 11px; }
           /* 只要有一列出現「今天」「▼ 異常低」等標記，nowrap 就會把日期欄整欄撐到 143px
              （表格欄寬取最寬的那格）。手機允許換行：標記掉到日期下面一行，欄寬回到 ~70px，
@@ -6864,7 +6884,7 @@ function Dashboard() {
                           {monthData.dynamicChannels.map((key) => (
                             <th key={key} scope="col">{labelOf(key)}</th>
                           ))}
-                          <th scope="col" style={{ color: "var(--gold)" }}>小計</th>
+                          <th scope="col" className="th-subtotal" style={{ color: "var(--gold)" }}>小計</th>
                         </tr>
                       </thead>
                       <tbody>
