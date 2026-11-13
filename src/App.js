@@ -6702,9 +6702,13 @@ function Dashboard() {
                       </button>
                     ))}
                   </div>
-                  <div
+                  {/* 2026-11-13：外框改成 label——原本只有中間那行字（145×16px）點了才有反應，
+                      點框的上下留白或放大鏡都沒用。label 包住輸入框，點框內任何地方都會聚焦。
+                      「×」原本只有 16×18px，還會讓整排在開始打字時長高 2px：
+                      內距加大到約 26px 見方，用負外距抵銷，框高不變 */}
+                  <label
                     className="field-box desk-only"
-                    style={{ position: "relative" }}
+                    style={{ position: "relative", cursor: "text" }}
                   >
                     <Search size={14} color="var(--text-dim)" />
                     <input
@@ -6724,7 +6728,8 @@ function Dashboard() {
                           border: "none",
                           color: "var(--text-dim)",
                           cursor: "pointer",
-                          padding: "2px 4px",
+                          padding: "6px 8px",
+                          margin: "-5px -6px -5px 0",
                           fontSize: 14,
                           fontWeight: 800,
                           lineHeight: 1,
@@ -6733,7 +6738,7 @@ function Dashboard() {
                         ×
                       </button>
                     )}
-                  </div>
+                  </label>
                 </div>
 
                 {/* 日期區間：快選（全月＋進行中月份的「1-本日」）＋自訂起迄，
