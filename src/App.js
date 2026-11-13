@@ -2042,6 +2042,7 @@ function Dashboard() {
   const allYearsRef = useRef(null); // 供非 React 回呼（快照合併、beforeunload）讀最新 state
   const fileInputRef = useRef(null);
   const tableRef = useRef(null);
+  const trendBoxRef = useRef(null); // 趨勢圖外框：提示框卡住時用來藏它（見下面「趨勢圖提示框的保險」）
 
   const [activeYear, setActiveYear] = useState(DEFAULT_YEAR);
   const [activeMonth, setActiveMonth] = useState(
@@ -2147,6 +2148,29 @@ function Dashboard() {
     window.addEventListener("resize", onResize);
     return () => window.removeEventListener("resize", onResize);
   }, [activeMonth, activeYear]);
+
+  // 趨勢圖提示框的保險（2026-11-13，對著線上實際在跑的 recharts 3.8 才看到）：
+  // recharts 3 靠 React 的 onMouseLeave 收提示框，有兩種情況它收不到——
+  // ① 點／觸控長條跳月份時長條會重畫，原本游標底下那個元素不在了，瀏覽器就不送 mouseout；
+  // ② 滑鼠移動改成每個畫格才處理一次，離開事件如果先到，晚到的那次移動又把提示框打開。
+  // 結果是提示框卡在圖上：手機上它幾乎蓋住整張圖，點別的地方也收不掉。
+  // 這裡直接聽瀏覽器原生事件：游標離開圖表、或在圖表外面按下（含觸控）就把提示框藏起來
+  // （CSS 的 .tip-off），回到圖上再放出來。只切 class、不動 React 狀態，不會讓整頁重畫。
+  useEffect(() => {
+    const box = trendBoxRef.current;
+    if (!box) return undefined;
+    const hide = () => box.classList.add("tip-off");
+    const show = () => box.classList.remove("tip-off");
+    const onDown = (e) => (box.contains(e.target) ? show() : hide());
+    box.addEventListener("mouseenter", show);
+    box.addEventListener("mouseleave", hide);
+    document.addEventListener("pointerdown", onDown, true);
+    return () => {
+      box.removeEventListener("mouseenter", show);
+      box.removeEventListener("mouseleave", hide);
+      document.removeEventListener("pointerdown", onDown, true);
+    };
+  }, []);
 
   // 分頁名稱：宿主頁面預設叫「React」，手機分頁列／書籤只看得到那四個字。
   // 這裡直接設成戰情室名稱，不管貼到哪個宿主都會對（與 viewport 同屬宿主頁面修補）。
@@ -4376,12 +4400,17 @@ function Dashboard() {
           letter-spacing: -0.03em;
         }
         .pie-center .small { margin-top: 4px; font-size: 10px; color: var(--text-dim); font-weight: 700; letter-spacing: .1em; text-transform: uppercase; }
-        /* 2026-11-13：圓餅圖的扇形可以被聚焦（滑鼠點一下、或按 Tab），瀏覽器會在圓餅外面畫一個
-           黑色（深色主題是白色）方框。這張圖沒有可以操作的東西，不需要焦點框；
-           JSX 那邊另外用 rootTabIndex={-1} 讓 Tab 不停在它上面。只關圓餅，不動趨勢圖 */
-        .recharts-pie:focus,
-        .recharts-pie-sector:focus,
-        .recharts-sector:focus { outline: none; }
+        /* 2026-11-13：圖表裡的 SVG 元素可以被聚焦（滑鼠點一下、或按 Tab），瀏覽器會沿著它的外框畫一個
+           黑色（深色主題是白色）方框。線上跑的是 recharts 3.8：它把每一層都做成可聚焦的，所以點一下長條，
+           黑框會框住「整排長條」；點圓餅則框住整個圓餅。兩張圖都沒有要用鍵盤操作的東西，焦點框一律關掉。
+           JSX 那邊兩張圖另外關 accessibilityLayer（見趨勢圖的註解），圓餅再加 rootTabIndex={-1}
+           （recharts 2 的 Tab 停點在這裡），讓 Tab 不停在圖上 */
+        .recharts-wrapper :focus { outline: none; }
+        /* 趨勢圖提示框的保險：游標離開圖表、或在圖表外面按下（含觸控）時，JS 會在外框加上 tip-off
+           （原因見 trendBoxRef 那段 useEffect 的註解）。提示框、那條直線、線上的圓點一起藏 */
+        .trend-chart-box.tip-off .recharts-tooltip-wrapper,
+        .trend-chart-box.tip-off .recharts-tooltip-cursor,
+        .trend-chart-box.tip-off .recharts-active-dot { visibility: hidden !important; }
         .pie-empty {
           position: absolute; inset: 0;
           display: flex; flex-direction: column;
@@ -5636,6 +5665,7 @@ function Dashboard() {
                   {/* 圖表吃可用高度但封頂 480：柱差更好讀、又不會稀疏；
                       殘餘差額由右側統計卡 space-between 吸收，底部依然切齊 */}
                   <div
+                    ref={trendBoxRef}
                     className="trend-chart-box"
                     style={{
                       flex: 1,
@@ -5645,9 +5675,14 @@ function Dashboard() {
                     }}
                   >
                     <ResponsiveContainer width="100%" height="100%">
+                      {/* accessibilityLayer={false}：recharts 3 預設會讓整張圖能被聚焦、用方向鍵逐月看提示框。
+                          副作用是滑鼠點一下長條（跳月份）圖就拿到焦點，提示框從此卡在圖上，滑鼠移開也不消失，
+                          要點別的地方才會收掉。這張圖每個月的數字在月份頁籤、右邊的統計卡與下方表格都有，
+                          所以關掉，回到「滑鼠移上去才出現、移開就消失」。recharts 2 沒有這個預設，加了也無害 */}
                       <ComposedChart
                         data={deferredTrendData}
                         barCategoryGap={28}
+                        accessibilityLayer={false}
                       >
                         <CartesianGrid
                           vertical={false}
@@ -6041,7 +6076,7 @@ function Dashboard() {
                     </div>
                   ) : (
                   <ResponsiveContainer width="100%" height="100%">
-                    <PieChart>
+                    <PieChart accessibilityLayer={false}>
                       <Pie
                         data={deferredDonutData}
                         dataKey="value"
