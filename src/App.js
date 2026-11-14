@@ -1208,21 +1208,23 @@ const LABELS = {
   google: "Google",
 };
 
-// 通路色票：深淺色各一套（淺色版沿用暖色調低飽和色，深色版用高對比亮色）
+// 通路色票：深淺色各一套，兩套是同一組色相（淺色版＝暖色調低飽和、偏深；深色版＝同色相提亮）。
+// 2026-11-14 深色版改版：原本是螢光黃／天藍／正紅／桃紅這類高彩度色，老闆覺得花；
+// 改成淺色版每個顏色的「提亮版」，彩度壓在 0.3–0.6，當色塊與當文字都夠清楚（最低 4.9:1）。
 // pchome／coupang／pinkoi 給固定色（2026-10-23）：原本這幾個走 CHANNEL_FALLBACK 依「排序位置」
 // 配色，插入新通路後整排顏色會位移，而且 coupang 撞 MOMO 紫、pinkoi 撞 POS 黃
 const CHANNEL_COLORS = {
   dark: {
-    pos: "#FBBF24",
-    web: "#38BDF8",
-    shopee: "#EF4444",
-    momo: "#A78BFA",
-    pchome: "#FB923C",
-    coupang: "#2DD4BF",
-    pinkoi: "#F472B6",
-    other: "#8FA3BE",
-    fb: "#3B82F6",
-    google: "#10B981",
+    pos: "#CDA85F",
+    web: "#7FA9CB",
+    shopee: "#D9776A",
+    momo: "#A898CC",
+    pchome: "#DB9160",
+    coupang: "#6DB3A8",
+    pinkoi: "#D48CAB",
+    other: "#A6A49B",
+    fb: "#7FA9CB",
+    google: "#7DBD96",
   },
   light: {
     pos: "#8A6A2E",
@@ -1241,7 +1243,7 @@ const CHANNEL_COLORS = {
 // POS 黃／Google 綠，新增第 8 個通路會拿到「跟網店一模一樣的藍」，圓餅與排名分不出來。
 // 改成上面固定色都沒用過的色相（黃綠、靛、棕、蘭紫），前兩個最不容易混淆
 const CHANNEL_FALLBACK = {
-  dark: ["#A3E635", "#818CF8", "#D4A373", "#F0ABFC"],
+  dark: ["#A9C46C", "#8E9AD6", "#C4A084", "#C79AD0"],
   light: ["#556E26", "#3D4F94", "#7A5540", "#8A4B8F"],
 };
 
@@ -1310,10 +1312,10 @@ const colorOf = (k, i = 0, theme = "dark") => {
 
 // 通路色拿來「當文字」時的版本（表頭、頁尾合計）。色票本身是給色塊／長條用的，
 // 圖形 3:1 就夠；同一個顏色寫成 10–13px 的字要 4.5:1，量出來有三個不夠：
-//   淺色 網店 #4A7FA5 → 3.82、淺色 POS #8A6A2E → 4.45、深色 蝦皮 #EF4444 → 3.93
-// 這裡只加深／提亮這三個，色相不變；色塊與圖表照舊用 colorOf（2026-11-13）
+//   淺色 網店 #4A7FA5 → 3.82、淺色 POS #8A6A2E → 4.45、深色 蝦皮 → 表頭底色上 4.28
+// 這裡只加深／提亮這三個，色相不變；色塊與圖表照舊用 colorOf（2026-11-13；深色蝦皮 11-14 隨改版換色）
 const CHANNEL_TEXT_COLORS = {
-  dark: { shopee: "#F87171" },
+  dark: { shopee: "#E9978A" },
   light: { web: "#3A6B8F", pos: "#7A5C22" },
 };
 const textColorOf = (k, i = 0, theme = "dark") =>
@@ -1904,18 +1906,12 @@ function TooltipCard({
       </div>
       <div className="tooltip-list">
         <div className="tooltip-row">
-          <span
-            className="tooltip-label-dot"
-            style={{ background: "#3B82F6" }}
-          />
+          <span className="tooltip-label-dot actual" />
           <span className="tooltip-label">本年實績</span>
           <strong className="tooltip-val mono">{num(actual)}</strong>
         </div>
         <div className="tooltip-row">
-          <span
-            className="tooltip-label-dot"
-            style={{ background: "#6B7280" }}
-          />
+          <span className="tooltip-label-dot last" />
           <span className="tooltip-label sec">
             {/* 月初還沒有資料（runningDays＝0）時同日區間不存在，數字其實是去年整月 */}
             {isRunning && runningLastYear != null
@@ -2803,13 +2799,14 @@ function Dashboard() {
     () =>
       theme === "dark"
         ? {
-            gold: "#3B82F6",
-            goldDim: "#60A5FA",
-            goldGlow: "rgba(59,130,246,0.06)",
-            textDim: "#8296B3",
-            border: "rgba(255,255,255,0.06)",
-            bgDeep: "#0D1520",
-            green: "#10B981",
+            // 2026-11-14 深色改版：圖表跟著 CSS 變數那組走（長條＝米白，同淺色版的「近黑」）
+            gold: "#E6E3DA",
+            goldDim: "#A6A49B",
+            goldGlow: "rgba(240,238,230,0.06)",
+            textDim: "#A6A49B",
+            border: "rgba(240,238,230,0.08)",
+            bgDeep: "#1F1E1D",
+            green: "#7DBD96",
           }
         : {
             gold: "#1C1C1E",
@@ -3934,34 +3931,41 @@ function Dashboard() {
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=DM+Sans:opsz,wght@9..40,300..800&family=Noto+Sans+TC:wght@400;500;700;900&display=swap');
 
+        /* 深色主題 2026-11-14 改版（老闆：「深色配色有點花，所以我都用淺色」）。
+           原本是深藍底＋亮藍主色＋螢光綠／亮黃／桃紅等十來種高彩度顏色。改成跟淺色版同一套設計語言：
+           暖灰黑底（接近 Claude 的深色介面）、主色＝米白（淺色版的主色是近黑，這裡反過來）、
+           綠／紅／藍只留語意用途並降彩度。主色跟內文同色是刻意的（淺色版也是），層次靠字重與大小。
+           每個顏色壓在實際底色上的對比都 ≥4.5:1（試算與實頁量測見交接檔 11-14 段） */
         :root, [data-theme="dark"] {
-          --bg-deep: #0D1520;
-          --bg-surface: #131F2E;
-          --bg-elevated: #1A2840;
-          --bg-hover: #1E2F4A;
-          --border: rgba(255,255,255,0.06);
-          --border-bright: rgba(255,255,255,0.12);
-          /* 2026-11-13：#3B82F6 當文字只有 3.3–4.0:1（年月選單、區塊標題、小計、今天列），
-             提亮到 #60A5FA（面板 6.5／次層 5.8／今天列 5.6）。壓在這個底色上的字用 --on-gold */
-          --gold: #60A5FA;
-          --on-gold: #0D1520;
-          --gold-dim: #60A5FA;
-          --gold-glow: rgba(59,130,246,0.12);
-          --gold-bright: #60A5FA;
-          --text-primary: #E8EFF8;
-          --text-secondary: #8FA3BE;
-          --text-dim: #8296B3; /* 深色輔助字：實測對比 ≥4.8:1（原 #6B7F9E 只有 3.6） */
-          --green: #10B981;
-          --green-dim: rgba(16,185,129,0.12);
-          --red: #F87171; /* 原 #EF4444 當文字 3.9–4.4:1，提亮後 6.0／5.3 */
-          --red-dim: rgba(239,68,68,0.12);
-          --blue: #38BDF8;
-          --blue-dim: rgba(56,189,248,0.12);
-          --shadow-card: 0 1px 3px rgba(0,0,0,0.3), 0 1px 2px rgba(0,0,0,0.2);
-          --table-border: rgba(255,255,255,0.05);
-          --row-today-bg: #1B2B47;
-          --focus-ring: rgba(96,165,250,0.5); /* 聚焦框要一眼可見（原 gold-glow 太淡） */
+          --bg-deep: #1F1E1D;
+          --bg-surface: #262624;
+          --bg-elevated: #30302E;
+          --bg-hover: #383733;
+          --border: rgba(240,238,230,0.08);
+          --border-bright: rgba(240,238,230,0.15);
+          --gold: #F0EEE6;
+          --on-gold: #1F1E1D;
+          --gold-dim: #C2C0B6;
+          --gold-glow: rgba(240,238,230,0.07);
+          --gold-bright: #F0EEE6;
+          --text-primary: #F0EEE6;
+          --text-secondary: #C2C0B6;
+          --text-dim: #A6A49B;
+          --green: #7DBD96;
+          --green-dim: rgba(125,189,150,0.12);
+          --red: #EA9485;
+          --red-dim: rgba(234,148,133,0.11);
+          --blue: #86B4D6;
+          --blue-dim: rgba(134,180,214,0.12);
+          --shadow-card: 0 1px 2px rgba(0,0,0,0.25);
+          --table-border: rgba(240,238,230,0.06);
+          --row-today-bg: #33322D;
+          --focus-ring: rgba(240,238,230,0.45);
         }
+        /* 告訴瀏覽器「這頁現在是深色」：不講的話，視窗右邊那條捲軸與下拉選單的彈出清單會照淺色畫，
+           深色頁面旁邊就是一條白的。只在深色主題設，淺色版維持瀏覽器預設（不動）。
+           不用 scrollbar-color——它會往下繼承，表格自己那條 6px 的細捲軸會被換成標準寬度 */
+        html[data-theme="dark"] { color-scheme: dark; }
 
         [data-theme="light"] {
           --bg-deep: #F7F6F3;
@@ -4102,9 +4106,10 @@ function Dashboard() {
            改用字重區分主次（狀態 600、時間 400），顏色不再打折 */
         .sync-time { font-weight: 400; }
         .sync-idle { color: var(--text-dim); }
-        .sync-syncing { color: var(--blue); border-color: rgba(56,189,248,0.3); background: var(--blue-dim); }
-        .sync-synced { color: var(--green); border-color: rgba(16,185,129,0.3); background: var(--green-dim); }
+        .sync-syncing { color: var(--blue); border-color: rgba(134,180,214,0.3); background: var(--blue-dim); }
+        .sync-synced { color: var(--green); border-color: rgba(125,189,150,0.3); background: var(--green-dim); }
         .sync-error { color: var(--red); border-color: rgba(239,68,68,0.3); background: var(--red-dim); }
+        [data-theme="dark"] .sync-error { border-color: rgba(234,148,133,0.32); }
         .spin { animation: spin 1s linear infinite; }
         @keyframes spin { to { transform: rotate(360deg); } }
 
@@ -4270,11 +4275,11 @@ function Dashboard() {
           border-radius: 14px 0 0 14px;
           background: var(--border);
         }
-        .stat-soft.accent-amber::before { background: #FBBF24; }
-        .stat-soft.accent-blue::before { background: #38BDF8; }
-        .stat-soft.accent-slate::before { background: #8FA3BE; }
-        .stat-soft.accent-green::before { background: #10B981; }
-        .stat-soft.green { border-color: rgba(16,185,129,0.2); }
+        .stat-soft.accent-amber::before { background: #CDA85F; }
+        .stat-soft.accent-blue::before { background: #7FA9CB; }
+        .stat-soft.accent-slate::before { background: #8F8D85; }
+        .stat-soft.accent-green::before { background: #7DBD96; }
+        .stat-soft.green { border-color: rgba(125,189,150,0.22); }
         .stat-soft.gray { border-color: var(--border); }
         .stat-label { display: flex; align-items: center; gap: 7px; font-size: 12px; font-weight: 700; color: var(--text-secondary); }
         .stat-value {
@@ -4311,8 +4316,8 @@ function Dashboard() {
           border: 1px solid var(--border);
           background: var(--bg-surface); color: var(--text-dim);
         }
-        .exec-pill.good { background: var(--green-dim); border-color: rgba(16,185,129,0.3); color: var(--green); }
-        .exec-pill.warn { background: rgba(251,191,36,0.12); border-color: rgba(251,191,36,0.3); color: #FBBF24; }
+        .exec-pill.good { background: var(--green-dim); border-color: rgba(125,189,150,0.3); color: var(--green); }
+        .exec-pill.warn { background: rgba(217,179,106,0.12); border-color: rgba(217,179,106,0.3); color: #D9B36A; }
         .exec-pill.neutral { background: var(--bg-surface); border-color: var(--border); color: var(--text-dim); }
         .exec-hero-grid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 8px; margin-top: 10px; }
         .exec-mini-stat {
@@ -4720,8 +4725,10 @@ function Dashboard() {
           font-weight: 700;
           color: var(--text-dim);
         }
-        .weekday-badge.weekend { color: #FBBF24; }
+        .weekday-badge.weekend { color: #D9B36A; }
         [data-theme="light"] .weekday-badge.weekend { color: #8A6A2E; }
+        /* 今天剛好是假日時，「六／日」落在今天列的米色底上只有 4.32:1（2026-11-14 週六才量到）；只加深這一格 */
+        [data-theme="light"] tbody tr.row-today .weekday-badge.weekend { color: #7A5C22; }
 
         /* ── Table ── */
         .table-wrap {
@@ -4775,10 +4782,10 @@ function Dashboard() {
         /* 2026-11-13：日期格是黏住的（sticky），表格橫向捲動時其他欄會從它底下捲過去。
            原本異常列的日期格只鋪半透明色，手機橫捲時後面的數字會透出來疊在日期上。
            黏住的格子底色一律要不透明：先鋪實色、再疊同一層淡色（疊出來跟整列的顏色一樣） */
-        tbody tr.row-spike .sticky-left { background: linear-gradient(rgba(251,191,36,0.04), rgba(251,191,36,0.04)), var(--bg-deep); }
-        tbody tr.row-low .sticky-left { background: linear-gradient(rgba(239,68,68,0.03), rgba(239,68,68,0.03)), var(--bg-deep); }
-        tbody tr.row-spike:hover .sticky-left { background: linear-gradient(rgba(251,191,36,0.08), rgba(251,191,36,0.08)), var(--bg-hover); }
-        tbody tr.row-low:hover .sticky-left { background: linear-gradient(rgba(239,68,68,0.06), rgba(239,68,68,0.06)), var(--bg-hover); }
+        tbody tr.row-spike .sticky-left { background: linear-gradient(rgba(217,179,106,0.06), rgba(217,179,106,0.06)), var(--bg-deep); }
+        tbody tr.row-low .sticky-left { background: linear-gradient(rgba(234,148,133,0.05), rgba(234,148,133,0.05)), var(--bg-deep); }
+        tbody tr.row-spike:hover .sticky-left { background: linear-gradient(rgba(217,179,106,0.12), rgba(217,179,106,0.12)), var(--bg-hover); }
+        tbody tr.row-low:hover .sticky-left { background: linear-gradient(rgba(234,148,133,0.1), rgba(234,148,133,0.1)), var(--bg-hover); }
         /* 淺色主題的表格底色是 --bg-surface（見下方 [data-theme="light"] .table-wrap），不是 --bg-deep */
         [data-theme="light"] tbody tr.row-spike .sticky-left { background: linear-gradient(rgba(251,191,36,0.05), rgba(251,191,36,0.05)), var(--bg-surface); }
         [data-theme="light"] tbody tr.row-low .sticky-left { background: linear-gradient(rgba(239,68,68,0.04), rgba(239,68,68,0.04)), var(--bg-surface); }
@@ -4941,6 +4948,9 @@ function Dashboard() {
           border-radius: 3px;
           flex: 0 0 auto;
         }
+        /* 兩顆圓點的顏色原本寫在 JSX 的 style 裡，主題蓋不到；搬到這裡，深色版在下面另外給 */
+        .tooltip-label-dot.actual { background: #3B82F6; }
+        .tooltip-label-dot.last { background: #6B7280; }
         .tooltip-label {
           flex: 1;
           font-size: 13px;
@@ -5003,19 +5013,19 @@ function Dashboard() {
           vertical-align: middle;
         }
         .anomaly-badge.spike {
-          background: rgba(251,191,36,0.15);
-          color: #FBBF24;
-          border: 1px solid rgba(251,191,36,0.25);
+          background: rgba(217,179,106,0.13);
+          color: #D9B36A;
+          border: 1px solid rgba(217,179,106,0.26);
         }
         .anomaly-badge.low {
-          background: rgba(239,68,68,0.12);
-          color: #F87171;
-          border: 1px solid rgba(239,68,68,0.2);
+          background: rgba(234,148,133,0.11);
+          color: #EA9485;
+          border: 1px solid rgba(234,148,133,0.24);
         }
         .anomaly-badge.zero {
-          background: rgba(130,150,179,0.12);
-          color: #9FB0C9;
-          border: 1px solid rgba(130,150,179,0.2);
+          background: rgba(240,238,230,0.07);
+          color: #B4B2A9;
+          border: 1px solid rgba(240,238,230,0.14);
         }
         .anomaly-badge.today {
           background: var(--gold-glow);
@@ -5026,9 +5036,9 @@ function Dashboard() {
         [data-theme="light"] .anomaly-badge.low { background: rgba(166,50,40,0.07); color: #A63228; border-color: rgba(166,50,40,0.18); }
         [data-theme="light"] .anomaly-badge.zero { background: rgba(28,28,30,0.05); color: #5C5C60; border-color: rgba(28,28,30,0.1); }
 
-        tr.row-spike { background: rgba(251,191,36,0.04); }
-        tr.row-low { background: rgba(239,68,68,0.03); }
-        tr.row-zero { background: rgba(107,127,158,0.05); }
+        tr.row-spike { background: rgba(217,179,106,0.06); }
+        tr.row-low { background: rgba(234,148,133,0.05); }
+        tr.row-zero { background: rgba(240,238,230,0.03); }
         [data-theme="light"] tr.row-spike { background: rgba(251,191,36,0.05); }
         [data-theme="light"] tr.row-low { background: rgba(239,68,68,0.04); }
         [data-theme="light"] tr.row-zero { background: rgba(28,28,30,0.03); }
@@ -5158,8 +5168,32 @@ function Dashboard() {
         /* 角落表頭底色需與表頭列一致（淺色 .sticky-left 覆寫會造成白色接縫） */
         [data-theme="light"] thead th.sticky-left { background: var(--bg-elevated); }
 
+        /* ── Dark mode overrides ──（2026-11-14 深色改版）
+           上面有些規則是深淺兩個主題共用、顏色寫死的（原本配的是深藍那一版）。
+           淺色版一個像素都不動，所以不改原規則，只在這裡替深色版另外蓋 */
+        [data-theme="dark"] .icon-btn:hover { border-color: rgba(234,148,133,0.32); }
+        [data-theme="dark"] .auto-warn { border-color: rgba(217,179,106,0.32); background: rgba(217,179,106,0.08); }
+        /* 圖表提示框：共用規則是深藍底（淺色版照舊）。深色版改成比卡片亮一階的暖灰，靠邊框與陰影浮起來 */
+        [data-theme="dark"] .tooltip-card {
+          background: #30302E;
+          border-color: rgba(240,238,230,0.14);
+          box-shadow: 0 16px 40px rgba(0,0,0,.5), 0 0 0 1px rgba(0,0,0,.2);
+          color: #F0EEE6;
+        }
+        [data-theme="dark"] .tooltip-month { color: #F0EEE6; border-bottom-color: rgba(240,238,230,0.1); }
+        [data-theme="dark"] .tooltip-running { color: #F0EEE6; border-color: rgba(240,238,230,.45); }
+        [data-theme="dark"] .tooltip-label { color: #C2C0B6; }
+        [data-theme="dark"] .tooltip-label.sec { color: #A6A49B; }
+        [data-theme="dark"] .tooltip-val { color: #F0EEE6; }
+        [data-theme="dark"] .tooltip-val.sec { color: #C2C0B6; }
+        [data-theme="dark"] .tooltip-yoy-box { background: rgba(240,238,230,0.05); border-color: rgba(240,238,230,0.08); color: #C2C0B6; }
+        [data-theme="dark"] .yoy-pos { color: #8CC7A3; background: rgba(125,189,150,0.14); }
+        [data-theme="dark"] .yoy-neg { color: #F5AFA2; background: rgba(234,148,133,0.13); }
+        [data-theme="dark"] .tooltip-label-dot.actual { background: #E6E3DA; }
+        [data-theme="dark"] .tooltip-label-dot.last { background: #8F8D85; }
+
         /* ── Recharts text ── */
-        [data-theme="dark"] .recharts-text { fill: #8296B3 !important; font-family: 'DM Mono', monospace !important; }
+        [data-theme="dark"] .recharts-text { fill: #A6A49B !important; font-family: 'DM Mono', monospace !important; }
         [data-theme="light"] .recharts-text { fill: #64646B !important; font-family: 'DM Mono', monospace !important; }
 
         /* ── 平板／半寬視窗（601–1280px）── 2026-11-13
